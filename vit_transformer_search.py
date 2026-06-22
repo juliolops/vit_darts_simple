@@ -77,11 +77,17 @@ def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_al
     model.train()
     
     val_iter = iter(val_loader)
+
+    # Captura o total de steps (batches) na época atual
+    total_steps = len(train_loader)
     
-    # Variáveis para rastrear acertos e total de amostras
-    trn_correct = 0
+    # Variáveis para rastrear acertos Top-1 e Top-5
+    trn_correct_top1 = 0
+    trn_correct_top5 = 0
     trn_total = 0
-    val_correct = 0
+    
+    val_correct_top1 = 0
+    val_correct_top5 = 0
     val_total = 0
     
     for step, (trn_X, trn_y) in enumerate(train_loader):
@@ -104,10 +110,14 @@ def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_al
         loss_alpha.backward()
         optimizer_alpha.step()
         
-        # Cálculo da acurácia de Validação no batch atual
+        # Acurácia Top-1 Validação
         _, val_preds = torch.max(val_logits, 1)
         val_total += val_y.size(0)
-        val_correct += (val_preds == val_y).sum().item()
+        val_correct_top1 += (val_preds == val_y).sum().item()
+        
+        # Acurácia Top-5 Validação
+        _, val_top5 = val_logits.topk(5, dim=1)
+        val_correct_top5 += (val_top5 == val_y.view(-1, 1)).sum().item()
 
         # ---------------------------------------------------------
         # ETAPA 2: Atualizar Pesos (MLPs) com dados de Treino
@@ -118,18 +128,25 @@ def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_al
         loss_w.backward()
         optimizer_w.step()
         
-        # Cálculo da acurácia de Treino no batch atual
+        # Acurácia Top-1 Treino
         _, trn_preds = torch.max(trn_logits, 1)
         trn_total += trn_y.size(0)
-        trn_correct += (trn_preds == trn_y).sum().item()
+        trn_correct_top1 += (trn_preds == trn_y).sum().item()
+        
+        # Acurácia Top-5 Treino
+        _, trn_top5 = trn_logits.topk(5, dim=1)
+        trn_correct_top5 += (trn_top5 == trn_y.view(-1, 1)).sum().item()
         
         # Exibição a cada 50 steps
         if step % 50 == 0:
-            trn_acc = 100. * trn_correct / trn_total
-            val_acc = 100. * val_correct / val_total
-            print(f"Step {step:03d} | "
-                  f"Treino -> Loss: {loss_w.item():.4f} Acc: {trn_acc:.2f}% | "
-                  f"Validação -> Loss: {loss_alpha.item():.4f} Acc: {val_acc:.2f}%")
+            trn_acc1 = 100. * trn_correct_top1 / trn_total
+            trn_acc5 = 100. * trn_correct_top5 / trn_total
+            val_acc1 = 100. * val_correct_top1 / val_total
+            val_acc5 = 100. * val_correct_top5 / val_total
+            
+            print(f"Step {step:03d}/{total_steps} | "
+                  f"Treino -> Loss: {loss_w.item():.4f} Acc@1: {trn_acc1:.2f}% Acc@5: {trn_acc5:.2f}% | "
+                  f"Validação -> Loss: {loss_alpha.item():.4f} Acc@1: {val_acc1:.2f}% Acc@5: {val_acc5:.2f}%")
 
 def main():
     if torch.backends.mps.is_available():

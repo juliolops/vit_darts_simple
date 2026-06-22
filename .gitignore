@@ -1,0 +1,5 @@
+# Ignora todo o conteúdo da pasta data
+data/*
+
+# Mas abre uma exceção para não ignorar o arquivo .gitkeep
+!data/.gitkeep
