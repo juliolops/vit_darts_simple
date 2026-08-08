@@ -1,0 +1,29 @@
+# QNAS / MO-QNAS family (replaces run_qnas_1.sh and run_moqnas_1.sh).
+# qnas/moqnas read population & generations from the config; --num_generations
+# overrides max_generations for them (see run_all_evolution.py).
+exp_root: experiment_cifar10_qfamily
+gpus: [0]
+repeats: 3
+seed_base: 42
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  limit_data_value: 10000
+  fitness_metric: best_accuracy
+  network_config: default
+  backbone_name: resnet18
+  log_level: INFO
+
+experiments:
+  - algo: moqnas
+    config: experiment_configs/cifar_mo/config0_2.yaml
+    name: exp10
+    overrides: {optimizer: AdamW, save_checkpoints_epochs: 5,
+                elite_mode: moead_topk, ref_dir_method: das-dennis}
+    flags: [--multi_objective]
+  # - algo: qnas
+  #   config: experiment_configs/cifar/config0_0.yaml
+  #   name: exp21
+  #   overrides: {elite_mode: global_k}

@@ -1,0 +1,15 @@
+pandas
+scikit-learn
+PyYAML==6.0.1
+tqdm
+seaborn
+matplotlib
+medmnist
+pynvml
+gputil
+pymoo
+plotly
+nbformat
+pycocotools
+gdown
+datasets

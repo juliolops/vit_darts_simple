@@ -1,0 +1,6 @@
+name: organamnist
+family: medmnist
+shape: [3, 28, 28]
+num_classes: 11
+task: multi-class
+stats_mode: sample

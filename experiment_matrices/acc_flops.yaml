@@ -1,0 +1,40 @@
+# Multi-objective search on (best_accuracy, total_flops) for the four
+# multi-objective algorithms, 3 repeats each, ONE experiment at a time on a
+# single GPU (physical GPU 1).
+#
+# Precision: bf16 (set in config0_3_acc_flops.yaml — no GradScaler, FP32
+# dynamic range; safe to run on L40S/A100/H100).
+#
+# Objectives come from the config (experiment_configs/cifar_mo/config0_3_acc_flops.yaml,
+# objectives: [best_accuracy, total_flops]); FLOPs are deterministic, so these
+# runs are fully reproducible. nsga2/nsga3/moead take population_size and
+# num_generations from the CLI; moqnas reads its population from the config and
+# only uses num_generations to override max_generations.
+#
+# Run with:   python launch.py experiment_matrices/acc_flops.yaml
+# Preview:    python launch.py experiment_matrices/acc_flops.yaml --dry-run
+# Resume:     python launch.py experiment_matrices/acc_flops.yaml --resume
+exp_root: experiment_cifar10_acc_flops
+gpus: [0,1]            # physical GPU 1 (CUDA_VISIBLE_DEVICES=1)
+gpus_per_run: 2      # one GPU per experiment, one experiment at a time
+repeats: 3
+seed_base: 42        # repeats use seeds 43, 44, 45
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  log_level: INFO
+  multi_objective: true       # keep the config's multi-objective setting
+  population_size: 20         # used by nsga2/nsga3/moead (ignored by moqnas)
+  num_generations: 150        # GA family: generations; moqnas: overrides max_generations
+  workers_per_gpu: 10          # 10 candidates evaluated concurrently per GPU
+  use_cache: true             # cache results to speed up repeated runs (e.g. for debugging)
+
+experiments:
+  - {algo: moqnas, config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: moqnas}
+  - {algo: nsga2,  config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: nsga2}
+  - {algo: nsga3,  config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: nsga3,
+    overrides: {ref_divisions: 12}}
+  - {algo: moead,  config: experiment_configs/cifar_mo/config0_3_acc_flops.yaml, name: moead,
+    overrides: {ref_divisions: 12, moead_T: 20, moead_scalar: tchebycheff, moead_pneighbor: 0.9}}

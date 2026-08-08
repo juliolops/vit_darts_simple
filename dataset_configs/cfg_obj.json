@@ -1,0 +1,28 @@
+{
+    "objectives": {
+        "accuracy": {
+            "goal": "maximize"
+        },
+        "inference": {
+            "goal": "minimize"
+        },
+        "flops": {
+            "goal": "minimize"
+        },
+        "params": {
+            "goal": "minimize"
+        },
+        "energy": {
+            "goal": "minimize"
+        },
+        "fairness_spd": {
+            "goal": "minimize"
+        },
+        "fairness_mean_tpr": {
+            "goal": "maximize"
+        },
+        "fairness_score": {
+            "goal": "maximize"
+        }
+    }
+}

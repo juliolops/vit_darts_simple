@@ -1,0 +1,6 @@
+name: pathmnist
+family: medmnist
+shape: [3, 28, 28]
+num_classes: 9
+task: multi-class
+stats_mode: sample

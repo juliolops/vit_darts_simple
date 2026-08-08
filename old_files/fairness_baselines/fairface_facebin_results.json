@@ -1,0 +1,191 @@
+{
+  "metadata": {
+    "fairface_csv": "/home/diegopaez/MoQ-NAS/data/FairFace/0.25/fairface_val.csv",
+    "beta": 0.2,
+    "timestamp": "2025-08-24T14:21:35.041552Z",
+    "device": "cuda",
+    "limit": "full"
+  },
+  "results": [
+    {
+      "ckpt": "/home/diegopaez/MoQ-NAS/checkpoints_facebin/facebin_convnext_tiny.pt",
+      "arch": "convnext_tiny",
+      "n_total": 10954,
+      "per_race_tpr": {
+        "Black": 1.0,
+        "East Asian": 1.0,
+        "Indian": 1.0,
+        "Latino_Hispanic": 0.9993838570548367,
+        "Middle Eastern": 1.0,
+        "Southeast Asian": 1.0,
+        "White": 0.9995203836930455
+      },
+      "per_race_counts": {
+        "Black": 1556,
+        "East Asian": 1550,
+        "Indian": 1516,
+        "Latino_Hispanic": 1623,
+        "Middle Eastern": 1209,
+        "Southeast Asian": 1415,
+        "White": 2085
+      },
+      "metrics": {
+        "min_group_tpr": 0.9993838570548367,
+        "max_min_gap": 0.0006161429451633227,
+        "spd_sum": 0.0032172413640254582,
+        "fairness_score": 0.9839137931798727
+      },
+      "overall_mean_tpr": 0.9998434629639832
+    },
+    {
+      "ckpt": "/home/diegopaez/MoQ-NAS/checkpoints_facebin/facebin_efficientnet_v2_s.pt",
+      "arch": "efficientnet_v2_s",
+      "n_total": 10954,
+      "per_race_tpr": {
+        "Black": 1.0,
+        "East Asian": 1.0,
+        "Indian": 1.0,
+        "Latino_Hispanic": 0.9981515711645101,
+        "Middle Eastern": 1.0,
+        "Southeast Asian": 0.9992932862190813,
+        "White": 0.9995203836930455
+      },
+      "per_race_counts": {
+        "Black": 1556,
+        "East Asian": 1550,
+        "Indian": 1516,
+        "Latino_Hispanic": 1623,
+        "Middle Eastern": 1209,
+        "Southeast Asian": 1415,
+        "White": 2085
+      },
+      "metrics": {
+        "min_group_tpr": 0.9981515711645101,
+        "max_min_gap": 0.001848428835489857,
+        "spd_sum": 0.009904242925065976,
+        "fairness_score": 0.9504787853746701
+      },
+      "overall_mean_tpr": 0.9995664630109482
+    },
+    {
+      "ckpt": "/home/diegopaez/MoQ-NAS/checkpoints_facebin/facebin_mnasnet1_0.pt",
+      "arch": "resnet18",
+      "n_total": 10954,
+      "per_race_tpr": {
+        "Black": 0.8065552699228792,
+        "East Asian": 0.8929032258064517,
+        "Indian": 0.83311345646438,
+        "Latino_Hispanic": 0.8853974121996303,
+        "Middle Eastern": 0.8428453267162944,
+        "Southeast Asian": 0.9144876325088339,
+        "White": 0.829736211031175
+      },
+      "per_race_counts": {
+        "Black": 1556,
+        "East Asian": 1550,
+        "Indian": 1516,
+        "Latino_Hispanic": 1623,
+        "Middle Eastern": 1209,
+        "Southeast Asian": 1415,
+        "White": 2085
+      },
+      "metrics": {
+        "min_group_tpr": 0.8065552699228792,
+        "max_min_gap": 0.10793236258595473,
+        "spd_sum": 0.35915164518949017,
+        "fairness_score": 0.0
+      },
+      "overall_mean_tpr": 0.8578626478070921
+    },
+    {
+      "ckpt": "/home/diegopaez/MoQ-NAS/checkpoints_facebin/facebin_mobilenet_v3_large.pt",
+      "arch": "mobilenet_v3_large",
+      "n_total": 10954,
+      "per_race_tpr": {
+        "Black": 0.9987146529562982,
+        "East Asian": 0.9941935483870967,
+        "Indian": 1.0,
+        "Latino_Hispanic": 0.9969192852741836,
+        "Middle Eastern": 0.9983457402812241,
+        "Southeast Asian": 1.0,
+        "White": 0.9976019184652278
+      },
+      "per_race_counts": {
+        "Black": 1556,
+        "East Asian": 1550,
+        "Indian": 1516,
+        "Latino_Hispanic": 1623,
+        "Middle Eastern": 1209,
+        "Southeast Asian": 1415,
+        "White": 2085
+      },
+      "metrics": {
+        "min_group_tpr": 0.9941935483870967,
+        "max_min_gap": 0.005806451612903274,
+        "spd_sum": 0.026420306654353465,
+        "fairness_score": 0.8678984667282327
+      },
+      "overall_mean_tpr": 0.9979678779091472
+    },
+    {
+      "ckpt": "/home/diegopaez/MoQ-NAS/checkpoints_facebin/facebin_resnet18.pt",
+      "arch": "resnet18",
+      "n_total": 10954,
+      "per_race_tpr": {
+        "Black": 1.0,
+        "East Asian": 1.0,
+        "Indian": 1.0,
+        "Latino_Hispanic": 1.0,
+        "Middle Eastern": 1.0,
+        "Southeast Asian": 1.0,
+        "White": 1.0
+      },
+      "per_race_counts": {
+        "Black": 1556,
+        "East Asian": 1550,
+        "Indian": 1516,
+        "Latino_Hispanic": 1623,
+        "Middle Eastern": 1209,
+        "Southeast Asian": 1415,
+        "White": 2085
+      },
+      "metrics": {
+        "min_group_tpr": 1.0,
+        "max_min_gap": 0.0,
+        "spd_sum": 0.0,
+        "fairness_score": 1.0
+      },
+      "overall_mean_tpr": 1.0
+    },
+    {
+      "ckpt": "/home/diegopaez/MoQ-NAS/checkpoints_facebin/facebin_resnet50.pt",
+      "arch": "resnet50",
+      "n_total": 10954,
+      "per_race_tpr": {
+        "Black": 0.9993573264781491,
+        "East Asian": 0.9993548387096775,
+        "Indian": 1.0,
+        "Latino_Hispanic": 0.9987677141096735,
+        "Middle Eastern": 1.0,
+        "Southeast Asian": 0.9992932862190813,
+        "White": 0.9990407673860912
+      },
+      "per_race_counts": {
+        "Black": 1556,
+        "East Asian": 1550,
+        "Indian": 1516,
+        "Latino_Hispanic": 1623,
+        "Middle Eastern": 1209,
+        "Southeast Asian": 1415,
+        "White": 2085
+      },
+      "metrics": {
+        "min_group_tpr": 0.9987677141096735,
+        "max_min_gap": 0.0012322858903265343,
+        "spd_sum": 0.0044399341349582455,
+        "fairness_score": 0.9778003293252088
+      },
+      "overall_mean_tpr": 0.9994019904146675
+    }
+  ]
+}

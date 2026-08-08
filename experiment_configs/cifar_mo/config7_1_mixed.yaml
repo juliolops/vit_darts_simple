@@ -1,0 +1,135 @@
+# Mixed search space: (best_accuracy, total_flops) — 18 operators across 6 families.
+#
+# Probability budget (initial, from_config):
+#   Conv  (ConvBlock)         25%  →  4 ops × 6.25% each
+#   DW    (DWConvBlock)       20%  →  3 ops × 6.67% each
+#   MBConv (MBConvV2/EPPGA)  20%  →  4 ops × 5.00% each
+#   Residual (ResidualV1)     10%  →  2 ops × 5.00% each
+#   Attention (SE/CBAM Conv)   5%  →  2 ops × 2.50% each
+#   Pooling (Max/Avg)         10%  →  2 ops × 5.00% each
+#   no_op                     10%  →  1 op  × 10.0%
+#   ─────────────────────────────────────────────────
+#   Total                    100%     18 operators
+
+QNAS:
+    crossover_rate: 0.5
+    max_generations: 150
+    max_num_nodes: 20
+    num_quantum_ind: 5
+    penalize_number: 3
+    repetition: 4
+    replace_method: best
+    update_quantum_gen: 1
+    crossover_frequency: 1
+    pop_crossover_rate: 0.4
+    pop_crossover_method: ['hux', 'one_point', 'two_point']
+    mo_crossover_strategy: random_elite
+    patience: 60
+    elite_mode: global_k
+    k_elites: 5
+    pool_factor: 3
+    ema_beta: 0.7
+    rank_weighting: True
+    initial_prob_distribution: from_config
+
+    # --- Network Architecture Rules ---
+    terminal_op_name: "no_op"
+    pool_op_name: "pool"
+    min_active_len: 1
+    truncate_after_noop: false
+    avoid_consecutive_pool: false
+    enforce_noop_in_update: true
+    noop_max_prob: 0.10      # hard cap: no_op never exceeds its initial 10%
+    noop_ramp_cap: false     # cap is flat (not ramped) since budget is already low
+
+    quantum_update_config:
+      quantum_rate_schedule: 'cosine'
+      max_update_schedule: 'cosine'
+      static_quantum_rate: 0.1
+      static_max_update: 0.05
+      quantum_rate_schedule_params:
+          start: 0.25
+          end: 0.1
+      max_update_schedule_params:
+          start: 1.0
+          end: 0.8
+      intensity_min: 0.5
+      intensity_max: 1.0
+
+    params_ranges:
+      decay: 0.9
+      learning_rate: 0.001
+      momentum: 0.0
+      weight_decay: 1.0e-4
+      backbone_percentage: [0.1, 0.999]
+
+    function_dict:
+      # --- Conv estándar (25%) ---
+      'conv_3_1_32':       {'function': 'ConvBlock',    'params': {'kernel': 3, 'strides': 1, 'filters': 32},  'prob': 1.0/4.0/4.0}
+      'conv_3_1_64':       {'function': 'ConvBlock',    'params': {'kernel': 3, 'strides': 1, 'filters': 64},  'prob': 1.0/4.0/4.0}
+      'conv_3_1_128':      {'function': 'ConvBlock',    'params': {'kernel': 3, 'strides': 1, 'filters': 128}, 'prob': 1.0/4.0/4.0}
+      'conv_5_1_64':       {'function': 'ConvBlock',    'params': {'kernel': 5, 'strides': 1, 'filters': 64},  'prob': 1.0/4.0/4.0}
+      # --- DWConv — Depthwise Separable (20%) ---
+      'dw_3_1_32':         {'function': 'DWConvBlock',  'params': {'kernel': 3, 'strides': 1, 'filters': 32},  'prob': 1.0/5.0/3.0}
+      'dw_3_1_64':         {'function': 'DWConvBlock',  'params': {'kernel': 3, 'strides': 1, 'filters': 64},  'prob': 1.0/5.0/3.0}
+      'dw_5_1_64':         {'function': 'DWConvBlock',  'params': {'kernel': 5, 'strides': 1, 'filters': 64},  'prob': 1.0/5.0/3.0}
+      # --- MBConv — Mobile Bottleneck / MobileNetV3+SE (20%) ---
+      'mb_3_1_32':         {'function': 'MBConv',       'params': {'kernel': 3, 'strides': 1, 'filters': 32},  'prob': 1.0/5.0/4.0}
+      'mb_3_1_64':         {'function': 'MBConv',       'params': {'kernel': 3, 'strides': 1, 'filters': 64},  'prob': 1.0/5.0/4.0}
+      'mb_5_1_64':         {'function': 'MBConv',       'params': {'kernel': 5, 'strides': 1, 'filters': 64},  'prob': 1.0/5.0/4.0}
+      'mb_eppga_3_1_64':   {'function': 'MBConv_EPPGA', 'params': {'kernel': 3, 'strides': 1, 'filters': 64},  'prob': 1.0/5.0/4.0}
+      # --- Residual (10%) ---
+      'res_3_1_32':        {'function': 'ResidualV1',   'params': {'kernel': 3, 'strides': 1, 'filters': 32},  'prob': 1.0/10.0/2.0}
+      'res_3_1_64':        {'function': 'ResidualV1',   'params': {'kernel': 3, 'strides': 1, 'filters': 64},  'prob': 1.0/10.0/2.0}
+      # --- Atención — SE y CBAM (5%) ---
+      'se_3_1_64':         {'function': 'SEConvBlock',  'params': {'kernel': 3, 'strides': 1, 'filters': 64},  'prob': 1.0/20.0/2.0}
+      'cbam_3_1_64':       {'function': 'CBAMConvBlock','params': {'kernel': 3, 'strides': 1, 'filters': 64},  'prob': 1.0/20.0/2.0}
+      # --- Pooling (10%) ---
+      'max_pool_2_2':      {'function': 'MaxPooling',   'params': {'kernel': 2, 'strides': 2},                 'prob': 1.0/10.0/2.0}
+      'avg_pool_2_2':      {'function': 'AvgPooling',   'params': {'kernel': 2, 'strides': 2},                 'prob': 1.0/10.0/2.0}
+      # --- Terminal (10%) ---
+      'no_op':             {'function': 'NoOp',         'params': {},                                          'prob': 1.0/10.0}
+
+train:
+    batch_size: 256
+    eval_batch_size: 256
+    max_epochs: 50
+    epochs_to_eval: 5
+    eval_window_agg: mean
+    optimizer: AdamW
+    precision: bf16
+    device: cuda:0
+
+    # Dataset
+    dataset: Cifar10
+    config_path_dataset: dataset_configs/cifar10.yaml
+    data_path: /path/to/datasets/cifar10
+    train_split: 0.9
+    split_seed: 2025
+    loader_seed: 777
+    download: true
+    stats_max_batches: 10
+    data_augmentation: false
+    subtract_mean: true
+    limit_data: true
+    limit_data_value: 10000
+    num_workers: 4
+
+    # Hardware settings
+    threads: 20
+    train_timeout: 7200 # 2 hours
+
+    # Network structure
+    network_config: default
+    backbone_name: mobilenet_v3_small
+
+    # Multi-objective
+    multi_objective: True
+    num_objectives: 2
+    objectives: ['best_accuracy', 'total_flops']
+    metrics:
+      - name: Accuracy
+      - name: HardwareMetrics
+      - name: ValidationLossFitness
+    artifacts:
+      - name: ConfusionMatrix

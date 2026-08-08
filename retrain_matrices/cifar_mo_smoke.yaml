@@ -1,0 +1,97 @@
+# Smoke test: 5-epoch retrain to verify the pipeline end-to-end.
+# Two selection rules per algorithm: best accuracy and balanced acc+flops.
+# All 4 MO algorithms, all 3 repeats = 24 cells.
+#
+# Run:
+#   python launch_retrain.py retrain_matrices/cifar_mo_smoke.yaml --dry-run
+#   python launch_retrain.py retrain_matrices/cifar_mo_smoke.yaml
+
+gpus: [0, 0, 1, 1]
+gpus_per_run: 1
+exp_root: experiment_cifar10_acc_flops
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  max_epochs: 5
+  epochs_to_eval: 5
+  patience_retrain: 5
+  num_repetitions: 1
+  lr_scheduler: cosine
+  optimizer: AdamW
+  batch_size: 256
+  eval_batch_size: 256
+  log_level: INFO
+  num_workers: 2
+  data_augmentation: true
+
+experiments:
+  # --- Best accuracy (weight 1.0 on accuracy) ---
+  - algo: moqnas
+    name: moqnas
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 1.0}
+      n: 1
+
+  - algo: nsga2
+    name: nsga2
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 1.0}
+      n: 1
+
+  - algo: nsga3
+    name: nsga3
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 1.0}
+      n: 1
+
+  - algo: moead
+    name: moead
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 1.0}
+      n: 1
+
+  # --- Balanced 50/50 acc + flops (min_accuracy excludes degenerate architectures) ---
+  - algo: moqnas
+    name: moqnas
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 0.5, total_flops: 0.5}
+      min_accuracy: 40.0
+      n: 1
+
+  - algo: nsga2
+    name: nsga2
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 0.5, total_flops: 0.5}
+      min_accuracy: 40.0
+      n: 1
+
+  - algo: nsga3
+    name: nsga3
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 0.5, total_flops: 0.5}
+      min_accuracy: 40.0
+      n: 1
+
+  - algo: moead
+    name: moead
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 0.5, total_flops: 0.5}
+      min_accuracy: 40.0
+      n: 1

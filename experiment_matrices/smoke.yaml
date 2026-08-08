@@ -1,0 +1,16 @@
+# Fast smoke matrix used to verify the launcher (2 cells, 1 gen each).
+exp_root: /tmp/launch_smoke
+gpus: [0, 1]         # two slots -> the two repeats run concurrently
+repeats: 2
+seed_base: 41        # repeat 1 -> seed 42 (matches expB_run1), repeat 2 -> seed 43
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  population_size: 4
+  num_generations: 1
+  log_level: INFO
+
+experiments:
+  - {algo: nsga2, config: experiment_configs/cifar_mo/config0_3_flops.yaml, name: smk}

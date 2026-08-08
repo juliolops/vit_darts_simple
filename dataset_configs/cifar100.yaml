@@ -1,0 +1,10 @@
+# configs/cifar100.yaml
+name: cifar100
+family: torchvision
+shape: [3, 32, 32]
+num_classes: 100
+mean: [0.5070757865905762, 0.48655030131340027, 0.4409191310405731]
+std:  [0.2673342823982239, 0.2564384639263153, 0.2761504650115967]
+task: classification
+stats_mode: known
+balanced_train: true

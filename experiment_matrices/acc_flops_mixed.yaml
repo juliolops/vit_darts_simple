@@ -1,0 +1,33 @@
+# Multi-objective search on (best_accuracy, total_flops) with a mixed search space
+# of 18 operators across 6 families (Conv, DW, MBConv, Residual, Attention, Pooling).
+#
+# no_op initial probability = 10% (hard-capped at 10% during evolution).
+# Convolutional families together hold 75% of initial probability budget.
+#
+# Run with:   python launch.py experiment_matrices/acc_flops_mixed.yaml
+# Preview:    python launch.py experiment_matrices/acc_flops_mixed.yaml --dry-run
+# Resume:     python launch.py experiment_matrices/acc_flops_mixed.yaml --resume
+exp_root: experiment_cifar10_acc_flops_mixed
+gpus: [0,1]
+gpus_per_run: 2
+repeats: 3
+seed_base: 100       # seeds 101, 102, 103 — no overlap with acc_flops (42) runs
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10.yaml
+  log_level: INFO
+  multi_objective: true
+  population_size: 20
+  num_generations: 150
+  workers_per_gpu: 5
+  use_cache: true
+
+experiments:
+  - {algo: moqnas, config: experiment_configs/cifar_mo/config7_1_mixed.yaml, name: moqnas}
+  - {algo: nsga2,  config: experiment_configs/cifar_mo/config7_1_mixed.yaml, name: nsga2}
+  - {algo: nsga3,  config: experiment_configs/cifar_mo/config7_1_mixed.yaml, name: nsga3,
+    overrides: {ref_divisions: 12}}
+  - {algo: moead,  config: experiment_configs/cifar_mo/config7_1_mixed.yaml, name: moead,
+    overrides: {ref_divisions: 12, moead_T: 20, moead_scalar: tchebycheff, moead_pneighbor: 0.9}}

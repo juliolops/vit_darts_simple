@@ -1,0 +1,69 @@
+# Retrain matrix for the acc_flops multi-objective experiments.
+# Each experiment × repeat cell selects candidates from the Pareto front
+# using weighted scalarization and dispatches retrain_parallel.py.
+#
+# Selection rules:
+#   type: weighted  — pick top-n by weighted sum of normalized objectives.
+#                     Directions (max/min) are auto-detected from cfg_obj.json.
+#   type: ids       — pick explicit candidate IDs (gen_ind notation, e.g. 111_13).
+#
+# Run:
+#   python launch_retrain.py retrain_matrices/cifar_mo.yaml --dry-run
+#   python launch_retrain.py retrain_matrices/cifar_mo.yaml
+
+gpus: [0]
+gpus_per_run: 1
+exp_root: experiment_cifar10_acc_flops
+
+defaults:
+  data_path: datasets/cifar10_data
+  dataset: cifar10
+  max_epochs: 200
+  epochs_to_eval: 200
+  num_repetitions: 1
+  lr_scheduler: cosine
+  optimizer: AdamW
+  batch_size: 256
+  eval_batch_size: 256
+  log_level: INFO
+  num_workers: 4
+  patience_retrain: 50
+  data_augmentation: true
+  # keep_metrics: true  # uncomment to include HardwareMetrics etc. from evolution config
+
+experiments:
+  # Best accuracy (ignoring FLOPs): weight 1.0 on accuracy
+  - algo: moqnas
+    name: moqnas
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 1.0}
+      n: 1
+
+  # Best FLOPs (ignoring accuracy): weight 1.0 on flops (minimize)
+  - algo: nsga2
+    name: nsga2
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {total_flops: 1.0}
+      n: 1
+
+  # Balanced 50/50 trade-off
+  - algo: nsga3
+    name: nsga3
+    repeats: 3
+    selection:
+      type: weighted
+      weights: {best_accuracy: 0.5, total_flops: 0.5}
+      n: 1
+
+  # 30% accuracy / 70% FLOPs: favour compact models
+  - algo: moead
+    name: moead
+    repeats: 1
+    selection:
+      type: weighted
+      weights: {best_accuracy: 0.3, total_flops: 0.7}
+      n: 1

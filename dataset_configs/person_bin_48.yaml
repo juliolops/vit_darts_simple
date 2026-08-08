@@ -1,0 +1,13 @@
+# configs/person_bin_48.yaml
+name: person_bin_48
+family: custom_local
+shape: [3, 48, 48]
+num_classes: 2
+task: classification
+stats_mode: known
+mean: [0.485, 0.456, 0.406]
+std:  [0.229, 0.224, 0.225]
+balanced_train: false
+
+transform:
+  img_size: 48
