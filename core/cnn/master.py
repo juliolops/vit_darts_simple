@@ -17,7 +17,7 @@ from . import model, trainer, model_resnet
 from utils.helpers import setup_dataset_info
 
 from .artifacts import ConfusionMatrix
-from .metrics import Accuracy, HardwareMetrics, MedMNIST_Metrics, FairnessMetric
+from .metrics import Accuracy, HardwareMetrics
 from .metrics.fitness import ScalarizedFitness, ValidationLossFitness
 
 # Handler configuration is deferred to the run instance (init_log downstream,
@@ -50,7 +50,6 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
         "HardwareMetrics": HardwareMetrics,
         "ScalarizedFitness": ScalarizedFitness,
         "ValidationLossFitness": ValidationLossFitness,
-        "FairnessMetric": FairnessMetric,
     }
 
     for metric_config in config['metrics']:
@@ -65,17 +64,7 @@ def create_metrics_from_config(config: dict, model_instance, device, input_shape
                 params['device'] = device
                 params['input_shape'] = input_shape[1:]  # Pass (C, H, W)
 
-            if metric_name == "FairnessMetric":
-                params['model'] = model_instance
-                params['device'] = device
-
             metric_instances.append(MetricClass(**params))
-    
-    # Conditionally add MedMNIST metrics if the dataset requires it
-    if "mnist" in config.get('dataset', '').lower() and config.get('phase', '') in ['retrain', 'resnet']:
-        metric_instances.append(
-            MedMNIST_Metrics(dataset_name=config['dataset'], data_path=config['data_path'])
-        )
 
     return metric_instances
 

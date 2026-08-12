@@ -1,4 +1,11 @@
-# Configuration file 1 : group 1
+# Simple CIFAR-10 multi-objective experiment tuned for a MacBook Air M4
+# (CPU-only run: this codebase only detects CUDA and falls back to CPU on
+# Apple Silicon, so there is no MPS acceleration path here).
+# Objectives: accuracy + parameter count + FLOPs (all deterministic, no
+# timing-based metric, so results are reproducible run to run).
+# Based on experiment_configs/cifar_mo/config0_3_flops.yaml with smaller
+# epochs/data/batch size so a full NSGA-III search finishes in minutes
+# instead of hours on a laptop CPU.
 
 QNAS:
     crossover_rate: 0.5
@@ -12,6 +19,7 @@ QNAS:
     crossover_frequency: 1
     pop_crossover_rate: 0.4 # offspring replacement proportion in the population
     pop_crossover_method: ['hux', 'one_point', 'two_point'] # 'hux' | 'one_point' | 'two_point'
+    mo_crossover_strategy: directional # random_elite
     patience: 60
     elite_mode: global_k # "single" | "global_k" | "bootstrap_k" | "old"
     k_elites: 5
@@ -23,26 +31,26 @@ QNAS:
     # --- Network Architecture Rules ---
     terminal_op_name: "no_op"
     pool_op_name: "pool"
-    min_active_len: 5
-    truncate_after_noop: true
-    avoid_consecutive_pool: true
+    min_active_len: 1
+    truncate_after_noop: false
+    avoid_consecutive_pool: false
     enforce_noop_in_update: true
     noop_max_prob: 0.9
     noop_ramp_cap: true
 
     quantum_update_config:
-      quantum_rate_schedule: 'static'                     # use 'cosine' schedule or 'static'
-      max_update_schedule: 'static'                       # use 'cosine' schedule or 'static'
-      static_quantum_rate: 0.1                            # (Your old 0.4 / 5)
-      static_max_update: 0.02                             # (Your old 0.105 / 5)
-      quantum_rate_schedule_params:                       # Parameters for 'cosine' rate schedule
-          start: 0.25                                      # Scaled down from 0.4
-          end: 0.01                                       # Scaled down from ~0.01
-      max_update_schedule_params:                         # Parameters for 'cosine' max_update schedule
-          start: 0.3                                      # Scaled down from 1.5
-          end: 0.16                                       # Scaled down from 0.8
-      intensity_min: 0.5                                  # Intensity sampling range - not used
-      intensity_max: 1.0                                  # Intensity sampling range - not used
+      quantum_rate_schedule: 'cosine'
+      max_update_schedule: 'cosine'
+      static_quantum_rate: 0.1
+      static_max_update: 0.05
+      quantum_rate_schedule_params:
+          start: 0.25
+          end: 0.1
+      max_update_schedule_params:
+          start: 1.0
+          end: 0.8
+      intensity_min: 0.5
+      intensity_max: 1.0
 
     params_ranges:
       decay: 0.9
@@ -64,41 +72,42 @@ QNAS:
                      'no_op':        {'function': 'NoOp', 'params': {}, 'prob': 1.0/3.0}}
 
 train:
-    batch_size: 256
-    eval_batch_size: 256
-    max_epochs: 50
-    epochs_to_eval: 5 
-    eval_window_agg: max   # how best_accuracy is aggregated over the eval window: max | mean | last
+    batch_size: 128
+    eval_batch_size: 128
+    max_epochs: 6
+    epochs_to_eval: 3
+    eval_window_agg: mean   # unbiased on a small validation set
     optimizer: AdamW
-    precision: bf16
-    device: cuda:0
+    precision: fp32          # bf16/fp16 need CUDA hardware; this run is CPU-only
+    device: cpu              # informational only; core/evaluation.py forces cpu when no CUDA
 
     # Dataset
     dataset: Cifar10
-    config_path_dataset: dataset_configs/cifar10.yaml   # <— updated key (points to your YAML)
-    data_path: /path/to/datasets/cifar10        # set this to your local path
+    config_path_dataset: dataset_configs/cifar10.yaml
+    data_path: /path/to/datasets/cifar10   # overridden by --data_path on the CLI
     train_split: 0.9
-    split_seed: 2025                             # controls split & balanced limiting
-    loader_seed: 777                             # controls DataLoader shuffling
-    download: true                               # safe even if files already exist
-    stats_max_batches: 10                        # used only if YAML sets stats_mode: sample
+    split_seed: 2025
+    loader_seed: 777
+    download: true
+    stats_max_batches: 10
     data_augmentation: false
     subtract_mean: true
     limit_data: true
-    limit_data_value: 10000
-    num_workers: 4
+    limit_data_value: 1500   # small CIFAR-10 subset so a laptop run finishes quickly
+    num_workers: 2
 
     # Hardware settings - parallelization
-    threads: 20
+    threads: 4                # one evaluation worker per M4 performance core
+    train_timeout: 1800       # 30 min safety cap per candidate
 
     # Network structure Configuration
     network_config: default
     backbone_name: mobilenet_v3_small
 
     # Multi-objective parameters
-    multi_objective: False
+    multi_objective: True
     num_objectives: 3
-    objectives: ['best_accuracy', 'total_params', 'cuda_inference_time'] # 'scalar_multi_objective', fitness_val_loss
+    objectives: ['best_accuracy', 'total_params', 'total_flops']
     metrics:
       - name: Accuracy
       - name: HardwareMetrics
@@ -106,7 +115,8 @@ train:
       - name: ScalarizedFitness
         params:
           metric_type: loss
-          max_params: 114090
-          max_inference_time: 1000
+          normalizers:
+            total_params: 114090
+            total_flops: 5.0e+8
     artifacts:
       - name: ConfusionMatrix

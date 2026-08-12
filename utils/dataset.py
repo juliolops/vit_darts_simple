@@ -11,8 +11,6 @@ import os
 
 import torchvision.datasets
 from torchvision.transforms import ToTensor
-import medmnist
-from medmnist import INFO
 
 from utils.io import load_yaml
 
@@ -27,12 +25,11 @@ def download_dataset(params: dict):
         - 'dataset' (str): The name of the dataset to be downloaded.
 
     If the dataset directory specified by 'data_path' does not exist, it will be created,
-    and the dataset will be downloaded. The function supports downloading datasets from
-    torchvision and MedMNIST. If the dataset already exists, it will print a message and
-    skip the download.
+    and the dataset will be downloaded from torchvision. If the dataset already exists,
+    it will print a message and skip the download.
 
     Raises:
-    - ValueError: If the dataset is not found in torchvision.datasets or MedMNIST INFO.
+    - ValueError: If the dataset is not found in torchvision.datasets.
     """
     data_path = params['data_path']
     dataset_name = params['dataset'].lower()
@@ -43,16 +40,10 @@ def download_dataset(params: dict):
         os.makedirs(data_path)
 
         if hasattr(torchvision.datasets, dataset_name.upper()):
-            dataset_family = "pytorch"
             dataset_class = getattr(torchvision.datasets, dataset_name.upper())
             dataset_class(data_path, download=True, transform=ToTensor())
-        elif dataset_name in INFO:
-            dataset_family = "medmnist"
-            general_info = INFO[dataset_name]
-            dataset_class = getattr(medmnist, general_info['python_class'])
-            dataset_class(root=data_path, split='train', download=True, transform=ToTensor(), as_rgb=True)
         else:
-            raise ValueError(f"Dataset class {dataset_name} not found in torchvision.datasets or available_datasets.")
+            raise ValueError(f"Dataset class {dataset_name} not found in torchvision.datasets.")
         return False
     else:
         return True

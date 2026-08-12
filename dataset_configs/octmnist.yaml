@@ -1,6 +1,0 @@
-name: octmnist
-family: medmnist
-shape: [3, 28, 28]
-num_classes: 4
-task: multi-class
-stats_mode: sample

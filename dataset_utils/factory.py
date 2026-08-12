@@ -10,9 +10,6 @@ from torch.utils.data import Subset
 import torchvision.datasets as tvd
 from sklearn.model_selection import StratifiedShuffleSplit
 
-import medmnist
-from medmnist import INFO
-
 from .sampling import apply_limit
 from .splits import deterministic_stratified_indices
 
@@ -142,96 +139,6 @@ def build_datasets(
 
         return train_dataset, val_dataset, test_dataset, train_labels, val_labels
 
-    # ---- MedMNIST family: train/val/test provided by dataset; only limit (optional)
-    if ds_name in INFO and hasattr(medmnist, INFO[ds_name]["python_class"]):
-        med_cls = getattr(medmnist, INFO[ds_name]["python_class"])
-        train_dataset = med_cls(root=data_path, split="train", download=download, transform=train_transform, as_rgb=True)
-        val_dataset   = med_cls(root=data_path, split="val",   download=download, transform=eval_transform, as_rgb=True)
-        test_dataset  = med_cls(root=data_path, split="test",  download=download, transform=eval_transform, as_rgb=True)
-
-        train_labels = train_dataset.labels.squeeze().astype(int)
-        val_labels   = val_dataset.labels.squeeze().astype(int)
-
-        limit_flag  = _coerce_bool(params.get("limit_data", False))
-        limit_value = int(params.get("limit_data_value", 0) or 0)
-        
-        train_dataset, val_dataset = _maybe_apply_limit_balanced(
-            train_dataset, val_dataset, train_labels, val_labels,
-            spec.num_classes, train_split, split_seed,
-            limit_data=limit_flag,
-            limit_value=limit_value,
-        )
-        return train_dataset, val_dataset, test_dataset, np.asarray(train_labels), np.asarray(val_labels)
-
-    # ---- ATLETA (ImageFolder layout)
-    if "atleta" in ds_name:
-        try:
-            train_dataset = tvd.ImageFolder(root=os.path.join(data_path, "train"), transform=train_transform)
-            val_dataset   = tvd.ImageFolder(root=os.path.join(data_path, "val"),   transform=eval_transform)
-            test_dataset  = tvd.ImageFolder(root=os.path.join(data_path, "test"),  transform=eval_transform)
-        except Exception as e:
-            raise ValueError(f"ATLETA dataset path is invalid or incomplete: {data_path} ({e})")
-
-        # Labels for limiting
-        train_labels = np.asarray([y for _, y in train_dataset.samples], dtype=int)
-        val_labels   = np.asarray([y for _, y in val_dataset.samples], dtype=int)
-
-        limit_flag  = _coerce_bool(params.get("limit_data", False))
-        limit_value = int(params.get("limit_data_value", 0) or 0)
-        
-        train_dataset, val_dataset = _maybe_apply_limit_balanced(
-            train_dataset, val_dataset, train_labels, val_labels,
-            spec.num_classes, train_split, split_seed,
-            limit_data=limit_flag,
-            limit_value=limit_value,
-        )
-        return train_dataset, val_dataset, test_dataset, train_labels, val_labels
-
-    # ---- Person/Face Binary Datasets (ImageFolder layout with missing test set handling)
-    if "person" in ds_name or "face" in ds_name:
-        train_path = os.path.join(data_path, "train")
-        val_path = os.path.join(data_path, "val")
-        
-        # 1. Use the validation set as the test set
-        test_dataset = tvd.ImageFolder(root=val_path, transform=eval_transform)
-        
-        # 2. Load the original training data to prepare for splitting
-        trainval_raw = tvd.ImageFolder(root=train_path, transform=None)
-        
-        class_to_idx = trainval_raw.class_to_idx
-        positive_class_name = 'person' if 'person' in ds_name else 'face'
-        
-        if positive_class_name in class_to_idx:
-            positive_idx = class_to_idx[positive_class_name]
-            params['positive_class_idx'] = positive_idx
-        else:
-            params['positive_class_idx'] = 1
-        
-        labels_full = np.asarray([y for _, y in trainval_raw.samples], dtype=int)
-        
-        # 3. Create new train/val split from the original training data
-        train_idx, val_idx = deterministic_stratified_indices(labels_full, train_split, split_seed)
-        train_subset = Subset(trainval_raw, train_idx)
-        val_subset   = Subset(trainval_raw, val_idx)
-        
-        train_labels = labels_full[train_idx]
-        val_labels   = labels_full[val_idx]
-
-        # 4. Apply data limiting (if configured)
-        limit_flag  = _coerce_bool(params.get("limit_data", False))
-        limit_value = int(params.get("limit_data_value", 0) or 0)
-        train_subset, val_subset = _maybe_apply_limit_balanced(
-            train_subset, val_subset, train_labels, val_labels,
-            spec.num_classes, train_split, split_seed,
-            limit_data=limit_flag,
-            limit_value=limit_value,
-        )
-        
-        # 5. Wrap subsets with the appropriate transforms
-        train_dataset = _TransformWrapper(train_subset, train_transform)
-        val_dataset   = _TransformWrapper(val_subset,   eval_transform)
-
-        return train_dataset, val_dataset, test_dataset, train_labels, val_labels
-
     # ---- Unknown family
-    raise NotImplementedError(f"Unknown dataset family for {spec.name}.")
+    raise NotImplementedError(f"Unknown dataset family for {spec.name}. Only torchvision "
+                              f"datasets (e.g. cifar10) are supported.")

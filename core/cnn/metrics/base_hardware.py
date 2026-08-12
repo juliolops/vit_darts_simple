@@ -61,6 +61,14 @@ def _check_device(data, device: str) -> bool:
     return data.device == torch.device(device)
 
 
+def _synchronize(device: str) -> None:
+    """Block until pending GPU work on ``device`` completes, for timing."""
+    if 'cuda' in device and torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif device == 'mps' and torch.backends.mps.is_available():
+        torch.mps.synchronize()
+
+
 def _conv_kernel_hw(kernel_size) -> Tuple[int, int]:
     if isinstance(kernel_size, tuple):
         if len(kernel_size) == 2:
@@ -157,12 +165,10 @@ class ModelMetrics:
             for _ in range(warmup_runs):
                 _ = self.model(x)
             for _ in range(measure_runs):
-                if 'cuda' in self.device and torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                _synchronize(self.device)
                 t0 = time.time()
                 _ = self.model(x)
-                if 'cuda' in self.device and torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                _synchronize(self.device)
                 t1 = time.time()
                 times.append(t1 - t0)
 
@@ -175,19 +181,31 @@ class ModelMetrics:
 
     def measure_memory(self, input_shape) -> int:
         """
-        Peak memory (bytes) on CUDA; returns 0 on CPU/no CUDA.
+        Peak memory (bytes) on CUDA; approximate allocated memory on MPS
+        (no peak-tracking API there, so this reads the allocator's current
+        usage right after the forward pass instead of a true peak); returns
+        0 on CPU/no GPU.
         """
-        if 'cuda' not in self.device or not torch.cuda.is_available():
+        is_cuda = 'cuda' in self.device and torch.cuda.is_available()
+        is_mps = self.device == 'mps' and torch.backends.mps.is_available()
+        if not (is_cuda or is_mps):
             return 0
 
         x = self.create_input(input_shape)
         if next(self.model.parameters()).device != torch.device(self.device):
             self.model.to(self.device)
 
-        torch.cuda.reset_peak_memory_stats(device=self.device)
-        with _model_eval_no_grad(self.model):
-            _ = self.model(x)
-        mem = torch.cuda.max_memory_allocated(device=self.device)
+        if is_cuda:
+            torch.cuda.reset_peak_memory_stats(device=self.device)
+            with _model_eval_no_grad(self.model):
+                _ = self.model(x)
+            mem = torch.cuda.max_memory_allocated(device=self.device)
+        else:
+            torch.mps.empty_cache()
+            with _model_eval_no_grad(self.model):
+                _ = self.model(x)
+            torch.mps.synchronize()
+            mem = torch.mps.current_allocated_memory()
         return int(mem)
 
     def measure_flops(self, input_shape) -> int:

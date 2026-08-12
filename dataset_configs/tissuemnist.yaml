@@ -1,6 +1,0 @@
-name: tissuemnist
-family: medmnist
-shape: [3, 28, 28]
-num_classes: 8
-task: multi-class
-stats_mode: sample

@@ -392,7 +392,6 @@ class BaseTrainer:
             with torch.no_grad():
                 for metric in self.post_processing_metrics:
                     try:
-                        # This will now only run post-processing metrics OTHER than Fairness
                         combined_final_results.update(metric.compute(epoch_results=combined_final_results))
                     except TypeError:
                         combined_final_results.update(metric.compute())
@@ -434,11 +433,6 @@ class BaseTrainer:
     
         # Escritura única del archivo
         clean_params = self._get_clean_params_for_saving()
-        clean_params.update({
-            "per_group_tpr": final_output.get("per_group_tpr"),
-            "metrics_fairness": final_output.get("metrics"),
-            "fairness_score": final_output.get("fairness_score"),
-        })
         create_info_file(self.params['model_path'], clean_params, 'training_params.txt')
         self.release_gpu_memory()
 
@@ -518,17 +512,15 @@ class BaseTrainer:
     
     def release_gpu_memory(self):
         """
-        Releases unused GPU memory by clearing the CUDA cache.
+        Releases unused GPU memory by clearing the device cache.
 
-        This method checks if CUDA is available and, if so, clears the GPU cache 
-        to free up unused memory.
-        If CUDA is not available, the method exits without performing any action.
+        Clears the CUDA or MPS cache depending on which device this trainer is
+        using; a no-op on CPU.
         """
-        if not torch.cuda.is_available():
-            #self.logger.info("CUDA is not available. No GPU memory to release.")
-            return
-        torch.cuda.empty_cache()
-        #self.logger.info("GPU cache cleared.")
+        if self.device.type == 'cuda':
+            torch.cuda.empty_cache()
+        elif self.device.type == 'mps':
+            torch.mps.empty_cache()
 
     def _get_clean_params_for_saving(self):
         """
@@ -537,14 +529,15 @@ class BaseTrainer:
         """
         # Use deepcopy to avoid modifying the original params object
         params_to_save = copy.deepcopy(self.params)
-        
-        # The model is passed within the 'metrics' list in the config.
-        # We need to find the FairnessMetric's params and remove the model from there.
-        if 'metrics' in params_to_save:
-            for metric_cfg in params_to_save['metrics']:
-                if metric_cfg.get('name') == 'FairnessMetric' and 'params' in metric_cfg:
-                    metric_cfg['params'].pop('model', None)
-        
+
+        # Metrics needing the live model instance (e.g. HardwareMetrics) get it
+        # injected into their 'params' dict (see master.create_metrics_from_config);
+        # strip it back out so the non-serializable model object never ends up
+        # in training_params.txt.
+        for metric_cfg in params_to_save.get('metrics', []):
+            if 'params' in metric_cfg:
+                metric_cfg['params'].pop('model', None)
+
         return params_to_save
 
     def reset_and_load_best_model(self, best_model_path):

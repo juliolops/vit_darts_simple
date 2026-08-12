@@ -1,6 +1,6 @@
-# QNAS / MO-QNAS family (replaces run_qnas_1.sh and run_moqnas_1.sh).
-# qnas/moqnas read population & generations from the config; --num_generations
-# overrides max_generations for them (see run_all_evolution.py).
+# MO-QNAS.
+# moqnas reads population & generations from the config; --num_generations
+# overrides max_generations for it (see run_all_evolution.py).
 exp_root: experiment_cifar10_qfamily
 gpus: [0]
 repeats: 3
@@ -23,7 +23,3 @@ experiments:
     overrides: {optimizer: AdamW, save_checkpoints_epochs: 5,
                 elite_mode: moead_topk, ref_dir_method: das-dennis}
     flags: [--multi_objective]
-  # - algo: qnas
-  #   config: experiment_configs/cifar/config0_0.yaml
-  #   name: exp21
-  #   overrides: {elite_mode: global_k}

@@ -15,8 +15,6 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import ToTensor
 
 from utils.helpers import create_info_file, check_file_exists
-import medmnist
-from medmnist import INFO
 import torchvision.datasets  # imported to ensure availability for factory
 
 # Local helpers you created
@@ -103,7 +101,7 @@ class GenericDataLoader:
 
         Parameters:
             params (dict): must include:
-                - dataset: dataset name (e.g., "cifar10", "cifar100", "atleta_axial", "pathmnist", ...)
+                - dataset: dataset name (e.g., "cifar10")
                 - data_path: root data folder
                 - config_path_dataset: path to YAML config describing this dataset
             train_split (float): Split ratio for training data (torchvision family).
@@ -148,11 +146,6 @@ class GenericDataLoader:
             if spec_from_yaml.family == "torchvision":
                 ds_cls = getattr(torchvision.datasets, self.params["dataset"].upper())
                 tmp_ds = ds_cls(self.data_path, train=True, download=self.download, transform=ToTensor())
-            elif spec_from_yaml.family == "medmnist":
-                if self.ds_name not in INFO or not hasattr(medmnist, INFO[self.ds_name]["python_class"]):
-                    raise ValueError(f"MedMNIST config refers to unknown dataset: {self.ds_name}")
-                med_cls = getattr(medmnist, INFO[self.ds_name]["python_class"])
-                tmp_ds = med_cls(root=self.data_path, split="train", download=self.download, transform=ToTensor(), as_rgb=True)
             else:
                 raise RuntimeError(f"No mean/std for {spec_from_yaml.name} and stats_mode={spec_from_yaml.stats_mode}")
             mean, std = _compute_sampled_mean_std(tmp_ds, max_batches=int(self.params.get("stats_max_batches", 10)))
@@ -211,11 +204,15 @@ class GenericDataLoader:
         """
         # Deterministic DataLoader shuffling
         g = _make_gen(int(self.params.get("loader_seed", self.seed)))
-        common = dict(num_workers=int(self.params.get("num_workers", 4)), pin_memory=True, generator=g)
-        if _supports_pin_memory_device() and pin_memory_device:
+        # pin_memory only helps (and is only supported) for CUDA host->device
+        # transfers; on MPS/CPU it's a no-op that just prints a warning, so
+        # skip it there instead of asking PyTorch to ignore it every batch.
+        use_pinned = bool(pin_memory_device) and str(pin_memory_device).startswith("cuda")
+        common = dict(num_workers=int(self.params.get("num_workers", 4)), pin_memory=use_pinned, generator=g)
+        if use_pinned and _supports_pin_memory_device():
             common["pin_memory_device"] = pin_memory_device
 
-        drop_last = True if self.params["dataset"].lower() == "organamnist" else False
+        drop_last = False
 
         if not for_train:
             test_loader = DataLoader(

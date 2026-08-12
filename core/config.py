@@ -24,12 +24,10 @@ from utils.helpers import load_yaml, load_pkl, natural_key
 # Used by _check_objectives to fail fast on objectives nothing will produce.
 METRIC_PROVIDES = {
     'Accuracy': {'accuracy'},
-    'MedMNIST_Metrics': {'auc_score', 'acc_medmnist'},
     'HardwareMetrics': {'cuda_inference_time', 'total_params', 'total_flops',
                         'model_memory_usage'},
     'ScalarizedFitness': {'scalar_multi_objective'},
     'ValidationLossFitness': {'fitness_val_loss'},
-    'FairnessMetric': {'fairness_spd', 'fairness_mean_tpr', 'fairness_score'},
 }
 TRAINER_BUILTIN_METRICS = {'best_accuracy', 'best_loss'}
 

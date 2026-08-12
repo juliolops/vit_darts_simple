@@ -5,9 +5,9 @@ The user-facing key is ``train.precision`` in the experiment config
 legacy boolean ``train.mixed_precision`` maps ``True -> 'fp16'`` and
 ``False``/absent ``-> 'fp32'``, so existing fp16 runs stay reproducible
 without edits. Consumed by ``core/config.py`` (parse-time normalization)
-and ``core/cnn/trainer.py``/``core/cnn/metrics/fairness.py`` (autocast
-dtype + GradScaler gating). Stdlib-only on purpose: importable from both
-``core.config`` and ``core.cnn`` without cycles.
+and ``core/cnn/trainer.py`` (autocast dtype + GradScaler gating).
+Stdlib-only on purpose: importable from both ``core.config`` and
+``core.cnn`` without cycles.
 """
 
 PRECISION_CHOICES = ('fp32', 'fp16', 'bf16')

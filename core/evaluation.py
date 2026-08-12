@@ -17,21 +17,10 @@ from utils.seeding import seed_candidate
 
 worker_data_loader = None
 
-# Worst-case penalty values for fairness objectives when a candidate fails
-# (timeout, OOM, etc.) — must be the least-preferred value for each goal:
-#   minimize objectives → large positive (0.0 would appear as "perfect fairness")
-#   maximize objectives → 0.0
-_FAIRNESS_PENALTY = {
-    'fairness_spd':      1.0,   # minimize: 0=perfect fairness, 1=worst disparity
-    'fairness_mean_tpr': 0.0,   # maximize: 0=worst TPR
-    'fairness_score':    0.0,   # maximize: 0=worst score
-}
 
 class EvalPopulation(object):
     """
-    Evaluate a population using a two-stage process.
-    1. Primary objectives are evaluated in parallel.
-    2. Expensive post-processing objectives (e.g., Fairness) are evaluated serially.
+    Evaluate a population's objectives in parallel across worker processes.
     """
     def __init__(self, params: dict, fn_dict: dict, log_level: str = 'INFO'):
         self.fn_dict = fn_dict
@@ -41,44 +30,15 @@ class EvalPopulation(object):
         self.train_params = setup_dataset_info(params)
         if 'objectives' not in self.train_params:
             raise KeyError("train_params must contain 'objectives' for evaluation.")
-        
+
         objectives = self.train_params.get('objectives', [])
         self.train_params['fitness_metric'] = objectives[0] if isinstance(objectives, list) and objectives else 'best_accuracy'
-        
-        all_objectives = list(self.train_params['objectives'])
-        
-        # Initialize lists
-        self.fairness_metric_names = []
-        self.primary_metric_names = []
-        self.parallel_train_params = copy.deepcopy(self.train_params) # Params for subprocesses
 
-        # Check if FairnessMetric is defined in the detailed metrics configuration
-        fairness_metric_config = next((m for m in self.train_params.get('metrics', []) if m['name'] == 'FairnessMetric'), None)
-        self.fairness_key_map = {
-                'fairness_spd': 'spd_sum',
-                'fairness_mean_tpr': 'mean_tpr',
-                'fairness_score': 'fairness_score'
-            }
-        if fairness_metric_config:
-            # 1. DYNAMIC SEPARATION
-            # Filter objectives containing 'fairness' into the serial list
-            self.fairness_metric_names = [obj for obj in all_objectives if 'fairness' in obj]
-            
-            # Everything else is a primary metric (run in parallel)
-            self.primary_metric_names = [obj for obj in all_objectives if 'fairness' not in obj]
+        self.primary_metric_names = list(self.train_params['objectives'])
+        self.parallel_train_params = copy.deepcopy(self.train_params)  # Params for subprocesses
+        self.logger.info(f"All metrics will be evaluated in PARALLEL: {self.primary_metric_names}")
 
-            # 2. CRITICAL: Exclude FairnessMetric from parallel workers
-            self.parallel_train_params['metrics'] = [
-                m for m in self.train_params.get('metrics', []) if m['name'] != 'FairnessMetric'
-            ]
-            self.logger.info(f"Primary metrics for PARALLEL evaluation: {self.primary_metric_names}")
-            self.logger.info(f"Fairness metrics for SERIAL evaluation: {self.fairness_metric_names}")
-        else:
-            self.primary_metric_names = all_objectives
-            self.logger.info(f"All metrics will be evaluated in PARALLEL: {self.primary_metric_names}")
-        
-        # Combined list for tracking purposes
-        self.metric_names = self.primary_metric_names + self.fairness_metric_names
+        self.metric_names = self.primary_metric_names
 
     def _num_workers(self, pop_size: int) -> int:
         """Number of evaluation worker processes for this generation.
@@ -128,6 +88,13 @@ class EvalPopulation(object):
                 "CUDA is initialized in the parent process; forked workers will fail to use "
                 "the GPU. Check for parent-side CUDA calls (e.g. tensors/RNG state on CUDA).")
 
+        if not torch.cuda.is_available() and torch.backends.mps.is_available() and n_workers > 1:
+            self.logger.info(
+                f"Apple MPS detected: {n_workers} worker processes will share the single "
+                "GPU (unlike CUDA, MPS has no multi-device concurrency). Expect workers to "
+                "queue/serialize on the GPU rather than run truly in parallel; a small "
+                "'threads'/--threads value (1-2) is usually faster than many workers.")
+
         processes = []
         print("\n")
         self.logger.info(f"Starting the Generation {generation} with {pop_size} individuals "
@@ -144,21 +111,12 @@ class EvalPopulation(object):
             processes.append(p)
 
         results: Dict[int, Dict[str, Any]] = {}
-        model_specs = [None] * pop_size
+        model_paths: List[str] = [None] * pop_size
         for _ in range(pop_size):
             idx, res_dict, model_path = result_queue.get()
             results[idx] = res_dict
-
             if model_path and os.path.exists(model_path):
-                # Save spec for later fairness eval
-                model_specs[idx] = {
-                    "model_path": model_path,
-                    "decoded_net": decoded_nets[idx],
-                    "decoded_params": decoded_params[idx],
-                    "info_dir": os.path.dirname(model_path)
-                }
-            else:
-                model_specs[idx] = None
+                model_paths[idx] = model_path
         for p in processes:
             p.join()
 
@@ -174,49 +132,14 @@ class EvalPopulation(object):
             "max worker idle=%.1fs of %.1fs wall.",
             n_workers, {wr: busy[wr][0] for wr in sorted(busy)}, max_idle, total_wall)
 
-        # --- FAIRNESS EVALUATION BLOCK ---
-        if self.fairness_metric_names:
-            # Run parallel evaluation
-            fairness_results = self.evaluate_fairness_parallel_cuda(model_specs)
-            self.logger.info("Merging fairness results...")
-            
-            for idx, f_metrics in fairness_results.items():
-                if idx in results:
-                    # 1. Update the candidate's result with all raw data (useful for logs/storage)
-                    results[idx].update(f_metrics)
-                    
-                    log_parts = []
-                    # 2. Extract specifically the objectives requested in the config
-                    for obj_name in self.fairness_metric_names:
-                        # Use the map to find the internal key (e.g., 'fairness_spd' -> 'spd_sum')
-                        internal_key = self.fairness_key_map.get(obj_name)
-                        
-                        if not internal_key:
-                            internal_key = obj_name
-
-                        val = f_metrics.get(internal_key)
-                        
-                        if val is not None:
-                            results[idx][obj_name] = val
-                            log_parts.append(f"{obj_name}: {val:.4f}")
-                        else:
-                            penalty = _FAIRNESS_PENALTY.get(obj_name, 0.0)
-                            self.logger.warning(
-                                f"Metric '{internal_key}' not found for candidate {idx}; "
-                                f"assigning penalty {penalty}")
-                            results[idx][obj_name] = penalty
-                            log_parts.append(f"{obj_name}: penalty={penalty}")
-
-                    log_msg = ", ".join(log_parts)
-                    self.logger.info(f"Candidate {idx} - {log_msg}")
-        else:
-            # remove the model files if no fairness evaluation is done
-            for spec in model_specs:
-                if spec and os.path.exists(spec["model_path"]):
-                    try:
-                        os.remove(spec["model_path"])
-                    except Exception as e:
-                        self.logger.warning(f"Could not remove model file {spec['model_path']}: {e}")
+        # No post-processing evaluation stage: remove the per-candidate model
+        # files each worker saved (only needed as input to that stage).
+        for model_path in model_paths:
+            if model_path and os.path.exists(model_path):
+                try:
+                    os.remove(model_path)
+                except Exception as e:
+                    self.logger.warning(f"Could not remove model file {model_path}: {e}")
 
         evol_end_time = time.perf_counter()
         mins, secs = divmod(evol_end_time - evol_time_start, 60)
@@ -241,8 +164,14 @@ class EvalPopulation(object):
                     gpu_idx = worker_rank % num_gpus
                     torch.cuda.set_device(gpu_idx)
                     gpu_device = f'cuda:{gpu_idx}'
+            elif torch.backends.mps.is_available():
+                # Apple Silicon GPU: a single shared device, no per-worker index.
+                # Each spawned worker process gets its own Metal context, so this
+                # is safe as long as the multiprocessing start method is 'spawn'
+                # (the macOS default) rather than 'fork'.
+                gpu_device = 'mps'
         except Exception as e:
-            self.logger.error(f"CUDA initialization failed for worker {worker_rank}: {e}. Falling back to CPU.")
+            self.logger.error(f"GPU initialization failed for worker {worker_rank}: {e}. Falling back to CPU.")
             gpu_device = 'cpu'
 
         os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -291,13 +220,15 @@ class EvalPopulation(object):
                     is_oom = 'out of memory' in str(e).lower()
                     if is_oom and attempt == 0:
                         self.logger.error(
-                            f"CUDA OOM training model {id_str} (worker {worker_rank}); "
+                            f"OOM training model {id_str} (worker {worker_rank}, device={gpu_device}); "
                             f"clearing cache and retrying once.")
                         if str(gpu_device).startswith('cuda'):
                             torch.cuda.empty_cache()
+                        elif str(gpu_device) == 'mps':
+                            torch.mps.empty_cache()
                         continue
                     self.logger.error(
-                        f"{'CUDA OOM' if is_oom else 'RuntimeError'} training model "
+                        f"{'OOM' if is_oom else 'RuntimeError'} training model "
                         f"{id_str} after {attempt + 1} attempt(s); scoring 0.0: {e}")
                     results_dict = {k: 0.0 for k in self.metric_names}
                     break
@@ -319,82 +250,3 @@ class EvalPopulation(object):
                 self.logger.info(f"Worker {worker_rank} – candidate {original_idx}: {metrics_log}")
 
         stats_queue.put((worker_rank, n_done, busy))
-    
-    def evaluate_fairness_parallel_cuda(self, model_specs: list, processes_per_gpu: int = 10) -> Dict[int, Dict[str, float]]:
-        import torch.multiprocessing as mp
-        from core.fairness.fairness_worker import (
-            device_count_probe_runner,
-            fairness_queue_runner,
-        )
-
-        metric_config = next((m for m in self.train_params.get('metrics', [])
-                            if m['name'] == 'FairnessMetric'), None)
-        
-        # If no config or no metrics, return zeros
-        if not metric_config or not self.fairness_metric_names:
-            return {i: {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names} for i in range(len(model_specs))}
-        
-        fairness_params = metric_config.get('params', {}) or {}
-        # Fairness evaluation follows the run's precision policy (Area 4);
-        # a metric-level 'precision' in the config may still override it.
-        fairness_params.setdefault('precision', self.train_params.get('precision', 'fp32'))
-        input_shape = self.train_params.get('input_shape', (3, 224, 224))
-        fairness_params['img_size'] = input_shape[2]
-
-        # Probe GPU count
-        ctx = mp.get_context("spawn")
-        probe_q = ctx.Queue()
-        probe_p = ctx.Process(target=device_count_probe_runner, args=(probe_q,))
-        probe_p.start()
-        num_gpus = probe_q.get()
-        probe_p.join()
-
-        indices = [i for i, spec in enumerate(model_specs) if spec]
-        if not indices:
-            return {i: {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names} for i in range(len(model_specs))}
-
-        slots = max(0, num_gpus * max(1, int(processes_per_gpu)))
-        if slots == 0:
-            merged = {}
-            for i in range(len(model_specs)):
-                merged.setdefault(i, {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names})
-            return merged
-
-        shards = [[] for _ in range(slots)]
-        for k, idx in enumerate(indices):
-            shards[k % slots].append((idx, model_specs[idx]))
-
-        res_q = ctx.Queue()
-        procs = []
-        for slot_id, shard in enumerate(shards):
-            if not shard:
-                continue
-            dev_idx = slot_id % num_gpus
-            p = ctx.Process(
-                target=fairness_queue_runner,
-                args=(
-                    res_q,
-                    shard,
-                    self.parallel_train_params,
-                    self.fn_dict,
-                    self.fairness_metric_names, # PASSING LIST HERE
-                    fairness_params,
-                    dev_idx,
-                ),
-            )
-            p.start()
-            procs.append(p)
-
-        merged: Dict[int, Dict[str, float]] = {}
-        for _ in range(len(procs)):
-            part = res_q.get()
-            merged.update(part)
-
-        for p in procs:
-            p.join()
-
-        # Fill any missing entries (failed candidates get worst-case penalty)
-        for i in range(len(model_specs)):
-            merged.setdefault(i, {name: _FAIRNESS_PENALTY.get(name, 0.0) for name in self.fairness_metric_names})
-
-        return merged

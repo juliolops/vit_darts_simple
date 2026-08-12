@@ -9,8 +9,6 @@ from utils.helpers import check_files, init_log, download_dataset
 from utils.seeding import set_global_seeds
 
 from algorithms.qnas.moqnas import MOQNAS
-from algorithms.qnas import qnas2 as qnas
-from algorithms.ga import base_ga as ga
 from algorithms.ga import nsga2, nsga3
 from algorithms.ga import moead
 
@@ -42,10 +40,10 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
     config = cfg.ConfigParameters(args, phase=phase)
     config.get_parameters()
 
-    # qnas/moqnas read generations from the config; let the CLI flag win.
+    # moqnas reads generations from the config; let the CLI flag win.
     # Must happen before save_params_logfile so continue_evolution (which
     # reloads the saved params) sees the overridden value.
-    if args.get('num_generations') is not None and args.get('algo', '').lower() in ('qnas', 'moqnas'):
+    if args.get('num_generations') is not None and args.get('algo', '').lower() == 'moqnas':
         logger.info(f"Overriding config max_generations ({config.QNAS_spec.get('max_generations')}) "
                     f"with --num_generations {args['num_generations']}")
         config.QNAS_spec['max_generations'] = args['num_generations']
@@ -113,35 +111,18 @@ def main(**args):
     algo = args.get('algo', 'nsga2').lower()
     logger.info(f"Selected algorithm: {algo}")
 
-    if args.get('resume') and algo not in ('moqnas', 'ga', 'nsga2', 'nsga3', 'moead'):
+    if args.get('resume') and algo not in ('moqnas', 'nsga2', 'nsga3', 'moead'):
         raise ValueError(f"--resume is not supported for --algo {algo}.")
 
     if args.get('num_generations') is None:
-        args['num_generations'] = 50  # GA-family default; qnas/moqnas use the config value
+        args['num_generations'] = 50  # nsga2/nsga3/moead default; moqnas uses the config value
 
     # If fn_list wasn’t set via CLI, fall back to config
     if args.get('fn_list') is None:
         args['fn_list'] = config.QNAS_spec.get('fn_list')
 
-    evolve_returns_four = False  # GA returns 4 values; others return 2
-
     # -------- Instantiate the engine --------
-    if algo == 'ga':
-        if ga is None:
-            raise ImportError("algorithms.ga.base_ga not found.")
-        logger.info("Using GA (single-objective).")
-        engine = ga.GA(
-            eval_pop,
-            config.train_spec['experiment_path'],
-            objectives=config.train_spec['objectives'],
-            log_file=config.files_spec['log_file'],
-            log_level=config.train_spec['log_level'],
-            data_file=config.files_spec['data_file'],
-            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
-        )
-        evolve_returns_four = True
-
-    elif algo == 'nsga3':
+    if algo == 'nsga3':
         if nsga3 is None:
             raise ImportError("algorithms.ga.nsga3 not found.")
         logger.info("Using NSGA-III.")
@@ -186,34 +167,6 @@ def main(**args):
             scalar_method=args.get('moead_scalar', 'tchebycheff'),
             prob_neighbor_mating=args.get('moead_pneighbor', 0.9),
         )
-    elif algo == 'qnas':
-        if qnas is None:
-            raise ImportError("algorithms.qnas.qnas2 not found.")
-        logger.info("Using QNAS.")
-        engine = qnas.QNAS(
-            eval_pop,
-            config.train_spec['experiment_path'],
-            objectives=config.train_spec['objectives'],
-            log_file=config.files_spec['log_file'],
-            log_level=config.train_spec['log_level'],
-            data_file=config.files_spec['data_file'],
-            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
-        )
-        # Special initializer for QNAS. Config validation forces multi-objective
-        # keys (e.g. mo_crossover_strategy) into every config, but the
-        # single-objective initializer doesn't take them — pass only what it accepts.
-        import inspect
-        accepted = set(inspect.signature(engine.initialize_qnas).parameters)
-        qnas_spec = {k: v for k, v in config.QNAS_spec.items() if k in accepted}
-        ignored = sorted(set(config.QNAS_spec) - accepted)
-        if ignored:
-            logger.info(f"Ignoring multi-objective-only config keys for QNAS: {ignored}")
-        engine.initialize_qnas(**qnas_spec)
-        logger.info("Starting QNAS evolution ...")
-        engine.evolve()
-        logger.info("QNAS evolution finished.")
-        return  # QNAS doesn’t return (pop, fits)
-
     elif algo == 'moqnas':
         if MOQNAS is None:
             raise ImportError("algorithms.qnas.moqnas.MOQNAS not found.")
@@ -237,9 +190,9 @@ def main(**args):
         return
 
     else:
-        raise ValueError("Unknown --algo. Choose from: ga, nsga2, nsga3, qnas, moqnas.")
+        raise ValueError("Unknown --algo. Choose from: nsga2, nsga3, moead, moqnas.")
 
-    # -------- Shared GA-style init (GA / NSGA-II / NSGA-III) --------
+    # -------- Shared GA-style init (NSGA-II / NSGA-III / MOEA-D) --------
     engine.initialize_ga(
         population_size=args['population_size'],
         num_generations=args['num_generations'],
@@ -260,22 +213,16 @@ def main(**args):
 
     # -------- Run evolution --------
     logger.info("Starting evolution ...")
-    if evolve_returns_four:
-        population, fitnesses, best_fitness, best_id = engine.evolve()
-        logger.info("Evolution finished.")
-        logger.info(f"Best fitness: {best_fitness}")
-        logger.info(f"Best individual (generation, index): {best_id}")
-    else:
-        population, fitnesses = engine.evolve()
-        logger.info("Evolution finished.")
-        if population is not None and fitnesses is not None:
-            # Print generically over the configured objectives (any number/type),
-            # instead of assuming a fixed 3-objective accuracy/params/time layout.
-            obj_names = config.train_spec['objectives']
-            for i, (ind, fit) in enumerate(zip(population, fitnesses)):
-                chrom = ind.tolist() if hasattr(ind, "tolist") else ind
-                fit_str = ", ".join(f"{name}={float(v):.4f}" for name, v in zip(obj_names, fit))
-                print(f"  Ind {i}: chrom={chrom}  →  ({fit_str})")
+    population, fitnesses = engine.evolve()
+    logger.info("Evolution finished.")
+    if population is not None and fitnesses is not None:
+        # Print generically over the configured objectives (any number/type),
+        # instead of assuming a fixed 3-objective accuracy/params/time layout.
+        obj_names = config.train_spec['objectives']
+        for i, (ind, fit) in enumerate(zip(population, fitnesses)):
+            chrom = ind.tolist() if hasattr(ind, "tolist") else ind
+            fit_str = ", ".join(f"{name}={float(v):.4f}" for name, v in zip(obj_names, fit))
+            print(f"  Ind {i}: chrom={chrom}  →  ({fit_str})")
 
 
 if __name__ == '__main__':
@@ -287,9 +234,7 @@ if __name__ == '__main__':
     parser.add_argument('--config_path_dataset', type=str, required=True,
                         help='Path to dataset config file (YAML).')
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['cifar10', 'cifar100', 'pathmnist', 'octmnist', 'tissuemnist',
-                                'organamnist', 'organcmnist', 'atleta_axial', 'atleta_coronal',
-                                'personbin', 'facebin'],
+                        choices=['cifar10'],
                         help='Dataset name.')
     parser.add_argument('--config_file', type=str, required=True,
                         help='Configuration file name.')
@@ -318,14 +263,14 @@ if __name__ == '__main__':
 
     # Algorithm selector
     parser.add_argument('--algo', type=str, default='nsga2',
-                        choices=['ga', 'nsga2', 'nsga3', 'moead', 'qnas', 'moqnas'],
-                        help='Which evolutionary algorithm to run.')
+                        choices=['nsga2', 'nsga3', 'moead', 'moqnas'],
+                        help='Which multi-objective evolutionary algorithm to run.')
 
-    # GA/NSGA params
+    # NSGA-II/III and MOEA/D params (shared GA-style init)
     parser.add_argument('--population_size', type=int, default=20)
     parser.add_argument('--num_generations', type=int, default=None,
-                        help='Number of generations. Defaults: 50 for ga/nsga2/nsga3/moead; '
-                             'config max_generations for qnas/moqnas (CLI value overrides it).')
+                        help='Number of generations. Defaults: 50 for nsga2/nsga3/moead; '
+                             'config max_generations for moqnas (CLI value overrides it).')
     parser.add_argument('--max_num_nodes', type=int, default=20)
     parser.add_argument('--fn_list', nargs='+', type=str, default=None,
                         help='Layer/op names used to decode chromosomes (fallback to config).')
