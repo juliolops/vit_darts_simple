@@ -13,8 +13,7 @@ import torch
 import torch.nn as nn
 
 from typing import Dict, List, Union, Any
-from . import model, trainer, model_resnet
-from utils.helpers import setup_dataset_info
+from . import model, trainer
 
 from .artifacts import ConfusionMatrix
 from .metrics import Accuracy, HardwareMetrics
@@ -165,23 +164,6 @@ def create_optimizer(net, params):
         raise ValueError(f"Unsupported optimizer: {params.get('optimizer')}")
 
 
-def ensure_model_path(params):
-    """
-    Ensure that a model path exists based on the 'experiment_path' in params,
-    and update params with the model path. This is used in the retrain and resnet training phases.
-
-    Args:
-        params (Dict[str, Any]): Configuration dictionary containing 'experiment_path'.
-
-    Returns:
-        Dict[str, Any]: Updated configuration dictionary with 'model_path' set.
-    """
-    model_path = os.path.join(params['experiment_path'])
-    if not os.path.exists(model_path):
-        os.makedirs(model_path)
-    params['model_path'] = model_path
-    return params
-
 def setup_additional_params(params, id_num=None):
     """
     Set additional parameters such as model path, generation, and individual if an identifier is provided.
@@ -213,67 +195,45 @@ def create_model(params: Dict[str, Any]) -> nn.Module:
     Creates and initializes a model instance based on the provided parameters.
     This function is responsible for building the network graph and initializing it.
     """
-    phase = params.get('phase', 'evolution')
-    
-    if phase == 'resnet':
-        n_channels = params.get('input_channels', 3)
-        num_classes = params.get('num_classes', 10)
-        model_flag = params.get('model_flag', 'resnet18')
-        if model_flag == 'resnet18':
-            net = model_resnet.ResNet18(in_channels=n_channels, num_classes=num_classes)
-        elif model_flag == 'resnet50':
-            net = model_resnet.ResNet50(in_channels=n_channels, num_classes=num_classes)
-        else:
-            raise ValueError(f"Unsupported model_flag: {model_flag}")
-    else: # Handles 'evolution', 'retrain', etc.
-        backbone_trainable = True if phase == 'retrain' else False
-        net = model.NetworkGraph(num_classes=params['num_classes'],
-                                input_shape=params['input_shape'],
-                                network_config=params['network_config'],
-                                backbone_name=params['backbone_name'],
-                                backbone_percentage=params.get('backbone_percentage', 1.0),
-                                backbone_trainable=backbone_trainable)
-        
-        if params.get('network_config') == 'backbone':
-            net.auto_resize_backbone = False
+    net = model.NetworkGraph(num_classes=params['num_classes'],
+                            input_shape=params['input_shape'],
+                            network_config=params['network_config'],
+                            backbone_name=params['backbone_name'],
+                            backbone_percentage=params.get('backbone_percentage', 1.0),
+                            backbone_trainable=False)
 
-        # Create functions and run a dummy forward pass to initialize layers
-        filtered_dict = {key: val for key, val in params['fn_dict'].items() if key in params['net_list']}
-        has_cbam_key = any(key.startswith('cbam') for key in filtered_dict)
-        net.create_functions(fn_dict=filtered_dict, net_list=params['net_list'], cbam=has_cbam_key)
-        
-        dummy_input = torch.randn(params['input_shape'])
-        with torch.no_grad():
-            _ = net(dummy_input)
-            
+    if params.get('network_config') == 'backbone':
+        net.auto_resize_backbone = False
+
+    # Create functions and run a dummy forward pass to initialize layers
+    filtered_dict = {key: val for key, val in params['fn_dict'].items() if key in params['net_list']}
+    has_cbam_key = any(key.startswith('cbam') for key in filtered_dict)
+    net.create_functions(fn_dict=filtered_dict, net_list=params['net_list'], cbam=has_cbam_key)
+
+    dummy_input = torch.randn(params['input_shape'])
+    with torch.no_grad():
+        _ = net(dummy_input)
+
     return net
 
 def create_trainer(params: Dict[str, Any], model: nn.Module, train_loader, val_loader, test_loader):
     """
     Creates a trainer instance for a given model.
     """
-    phase = params.get('phase', 'evolution')
-    
-    if phase == 'resnet':
-        optimizer = create_optimizer(model, params)
-        criterion = nn.BCEWithLogitsLoss() if params.get('task') == 'multi-label, binary-class' else nn.CrossEntropyLoss()
-        return trainer.ResNetTrainer(model, criterion, optimizer,
-                                    train_loader, val_loader, test_loader, params)
-    else: # Handles 'evolution', 'retrain', etc.
-        optimizer = create_optimizer(model, params)
-        criterion = nn.CrossEntropyLoss()
-        
-        metrics = create_metrics_from_config(
-            config=params,
-            model_instance=model,
-            device=params['device'],
-            input_shape=params['input_shape']
-        )
-        artifacts = create_artifacts_from_config(config=params)
+    optimizer = create_optimizer(model, params)
+    criterion = nn.CrossEntropyLoss()
 
-        return trainer.BaseTrainer(model, criterion, optimizer,
-                                train_loader, val_loader, test_loader, params, 
-                                metrics, artifacts)
+    metrics = create_metrics_from_config(
+        config=params,
+        model_instance=model,
+        device=params['device'],
+        input_shape=params['input_shape']
+    )
+    artifacts = create_artifacts_from_config(config=params)
+
+    return trainer.BaseTrainer(model, criterion, optimizer,
+                            train_loader, val_loader, test_loader, params,
+                            metrics, artifacts)
 
 # This function is now a simple wrapper around the two new functions
 def create_model_and_trainer(params, train_loader, val_loader, test_loader):
@@ -291,9 +251,8 @@ def run_training_phase(params: Dict[str, Any],
                         train_loader=None, val_loader=None, test_loader=None) -> Dict[str, Any]:
     """
     Generic function to update parameters, create the trainer, and run training.
-    It updates fn_dict, net_list, and additional parameters if provided, ensures that
-    the dataset info and (if necessary) the model path are set, and then creates a trainer
-    instance based on the phase ('evolution', 'retrain', or 'resnet').
+    It updates fn_dict, net_list, and additional parameters if provided, and then
+    creates a trainer instance and runs it.
 
     Args:
         params (Dict[str, Any]): Configuration dictionary.
@@ -322,11 +281,6 @@ def run_training_phase(params: Dict[str, Any],
         # If decoded params is not being evolved, get the value from the config file
         # or set it to 1.0 by default
         params['backbone_percentage'] = params.get('backbone_percentage', 1.0)
-    
-    # For retrain and resnet, ensure model path is created
-    if params['phase'] in ['retrain', 'resnet']:
-        params = setup_dataset_info(params)
-        params = ensure_model_path(params)
 
     trainer = create_model_and_trainer(params, train_loader, val_loader, test_loader)
 
@@ -370,79 +324,3 @@ def fitness(id_num: str, params: Dict[str, Any],
         # Set return_val to zeros if an error occurs
         raise e
 
-def retrain(params: Dict[str, Any],
-            fn_dict: Dict[str, Any],
-            net_list: List[str],
-            train_loader: torch.utils.data.DataLoader, 
-            val_loader: torch.utils.data.DataLoader,
-            test_loader: torch.utils.data.DataLoader) -> dict[str, Any]:
-    """
-    Retrain a model using the best architecture obtained during evolution.
-    This method assumes that the evolved parameters (or the best model checkpoint)
-    are available in the configuration.
-
-    Args:
-        params (Dict[str, Any]): Configuration dictionary.
-        fn_dict (Dict[str, Any]): Dictionary of layer definitions.
-        net_list (List[str]): List of layer names to be used in the network.
-        train_loader (torch.utils.data.DataLoader): Training DataLoader.
-        val_loader (torch.utils.data.DataLoader): Validation DataLoader.
-        test_loader (torch.utils.data.DataLoader): Test DataLoader.
-
-    Returns:
-        Dict[str, Any]: Dictionary containing the retraining results.
-
-    Raises:
-        Exception: Propagates any exception encountered during training.
-    """
-    try:
-        LOGGER.info(f"Retraining evolved model {params['experiment_path']} ...")
-        results_dict, _ = run_training_phase(params=params, fn_dict=fn_dict, net_list=net_list, train_loader=train_loader, val_loader=val_loader, test_loader=test_loader)
-        LOGGER.info(f"Retraining finished, test acc: {round(results_dict['test_accuracy'], 2)}")
-        return results_dict
-    except RuntimeError as e:
-        if "out of memory" in str(e):
-            LOGGER.error(f"Out of memory error: {e}")
-            return None
-        else:
-            LOGGER.error(f"Runtime error during training: {e}")
-            raise
-    except Exception as e:
-        LOGGER.error(f"An unexpected error occurred during training: {e}")
-        raise e
-
-def resnet_train(params: Dict[str, Any],
-                train_loader: torch.utils.data.DataLoader, 
-                val_loader: torch.utils.data.DataLoader,
-                test_loader: torch.utils.data.DataLoader) -> Dict[str, Any]:
-    """
-    Train a ResNet model using ResNetTrainer.
-    This method is tailored for the 'resnet' phase.
-
-    Args:
-        params (Dict[str, Any]): Configuration dictionary.
-        train_loader (torch.utils.data.DataLoader): Training DataLoader.
-        val_loader (torch.utils.data.DataLoader): Validation DataLoader.
-        test_loader (torch.utils.data.DataLoader): Test DataLoader.
-
-    Returns:
-        Dict[str, Any]: Dictionary containing the training results.
-
-    Raises:
-        Exception: Propagates any exception encountered during training.
-    """
-    try:
-        results_dict = run_training_phase(params, None, None,None, None, train_loader, val_loader, test_loader)
-        LOGGER.info(f"ResNet training finished, best {params['fitness_metric']}: {round(results_dict['best_accuracy'], 2)}")
-        return results_dict
-    except RuntimeError as e:
-        if "out of memory" in str(e):
-            LOGGER.error(f"Out of memory error: {e}")
-            results_dict = None
-            raise
-        else:
-            LOGGER.error(f"Runtime error during training: {e}")
-            raise
-    except Exception as e:
-        LOGGER.error(f"An unexpected error occurred during training: {e}")
-        raise e

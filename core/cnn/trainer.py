@@ -19,7 +19,7 @@ from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import (CosineAnnealingLR, ExponentialLR,
                                     MultiStepLR, ReduceLROnPlateau)
 
-from . import model, model_resnet
+from . import model
 from .artifacts import BaseArtifact
 from .metrics.base import BaseMetric
 from utils.helpers import create_info_file, init_log
@@ -573,60 +573,4 @@ class BaseTrainer:
         best_model.load_state_dict(torch.load(best_model_path, weights_only=True))
         best_model.to(self.params['device'])
         best_model.eval()
-        return best_model
-
-class ResNetTrainer(BaseTrainer):
-    """
-    ResNetTrainer is a specialized trainer class for training and evaluating ResNet models.
-    Args:
-        model_instance (torch.nn.Module): The neural network model to be trained.
-        criterion (torch.nn.Module): The loss function.
-        optimizer (torch.optim.Optimizer): The optimizer for training.
-        train_loader (torch.utils.data.DataLoader): DataLoader for the training dataset.
-        val_loader (torch.utils.data.DataLoader): DataLoader for the validation dataset.
-        test_loader (torch.utils.data.DataLoader): DataLoader for the test dataset.
-        params (dict): Dictionary of training parameters and model configuration.
-        logger (optional): Logger object for tracking training progress.
-    Attributes:
-        model_flag (str): Indicates which ResNet variant to use (e.g., 'resnet18', 'resnet50').
-    Methods:
-        reset_and_load_best_model(best_model_path):
-            Instantiates the specified ResNet model architecture and loads the state dictionary
-            from the provided checkpoint path.
-            Args:
-                best_model_path (str): Path to the saved model checkpoint.
-            Returns:
-                torch.nn.Module: The ResNet model loaded with the best checkpoint weights.
-            Raises:
-                ValueError: If an unsupported model_flag is provided.
-    """
-
-    def __init__(self, model_instance, criterion, optimizer, train_loader, val_loader, test_loader,
-                params: dict, logger=None):
-        # Call the parent constructor
-        super().__init__(model_instance, criterion, optimizer, train_loader, val_loader, test_loader, params, logger)
-        # Use a parameter to decide which ResNet to use (default to 'resnet18')
-        self.model_flag = self.params.get('model_flag', 'resnet18')
-
-    def reset_and_load_best_model(self, best_model_path):
-        """
-        For ResNet models, we instantiate the model using our model_resnet module and
-        load the state dictionary from the best checkpoint.
-        """
-        # Define which ResNet classes are available.
-        model_classes = {
-            'resnet18': model_resnet.ResNet18,
-            'resnet50': model_resnet.ResNet50
-        }
-        if self.model_flag not in model_classes:
-            raise ValueError(f"Unsupported model_flag: {self.model_flag}")
-
-        # Instantiate the chosen ResNet model.
-        best_model = model_classes[self.model_flag](
-            in_channels=self.params['input_shape'][1],
-            num_classes=self.params['num_classes']
-        )
-        # Load the saved state.
-        best_model.load_state_dict(torch.load(best_model_path, weights_only=True))
-        best_model.to(self.params['device'])
         return best_model

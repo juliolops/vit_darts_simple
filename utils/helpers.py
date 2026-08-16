@@ -8,7 +8,7 @@ import warnings
 
 warnings.warn(
     "utils.helpers is deprecated. Import from utils.io, utils.logging_utils, "
-    "utils.experiment, utils.dataset or utils.visualization instead.",
+    "utils.experiment or utils.dataset instead.",
     DeprecationWarning, stacklevel=2,
 )
 
@@ -24,9 +24,3 @@ from utils.experiment import (
     delete_old_dirs, delete_old_dirs_v2, calculate_time,
 )
 from utils.dataset import download_dataset, setup_dataset_info, dataset_cache
-from utils.visualization import (
-    plot_confusion_matrix, agg_results, test_acc_mean_std,
-    plot_training_history, get_gpu_memory, compute_hypervolume_mixed,
-    plot_hypervolume_over_epochs, plot_hypervolume_comparison,
-    plot_pareto_evolution, load_data_for_pareto,
-)
