@@ -38,7 +38,7 @@ from utils.logging_utils import init_log
 _FINGERPRINT_FIELDS = (
     'dataset', 'limit_data', 'limit_data_value', 'max_epochs',
     'epochs_to_eval', 'eval_window_agg', 'batch_size', 'optimizer', 'precision',
-    'objectives', 'seed', 'network_config', 'backbone_name', 'data_augmentation',
+    'objectives', 'seed', 'vit_model_name', 'vit_alphas_path', 'data_augmentation',
     'train_split', 'split_seed', 'loader_seed', 'mixed_precision',
 )
 
@@ -77,9 +77,8 @@ def candidate_key(decoded_net, decoded_params, fingerprint: str,
     share the same cache entry.
 
     The hyperparameter tuple covers every decoded param except the
-    positional ``candidate_id`` (notably the evolved continuous genes such
-    as ``backbone_percentage``, which the legacy per-algorithm caches
-    ignored).
+    positional ``candidate_id``, so the evolved continuous genes are part
+    of the key too.
     """
     net = tuple(fn for fn in decoded_net if fn not in noop_names)
     hp = tuple(sorted((k, _canonical(v)) for k, v in (decoded_params or {}).items()

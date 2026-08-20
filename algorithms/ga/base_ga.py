@@ -186,7 +186,6 @@ class GA(object):
 
         decoded_params = [None] * num_individuals
         decoded_nets = [None] * num_individuals
-        #backbone_percentage_array = np.random.uniform(0.0, 1.0, size=(len(decoded_nets), 1))
         for i in range(num_individuals):
             decoded_nets[i] = self.decode_net(self.population[i, :])
             # build params dict:

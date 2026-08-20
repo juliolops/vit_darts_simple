@@ -260,11 +260,6 @@ if __name__ == '__main__':
     parser.add_argument('--en_pop_crossover', action='store_true')
     parser.add_argument('--save_checkpoints_epochs', type=int, default=5)
     parser.add_argument('--limit_data_value', type=int, default=10000)
-    parser.add_argument('--backbone_name', type=str, default='mobilenet_v3_small',
-                        choices=['mobilenet_v3_small', 'mobilenet_v3_large',
-                                'mobilenet_v2', 'resnet18', 'resnet50'])
-    parser.add_argument('--network_config', type=str, default='default',
-                        choices=['default', 'dense', 'backbone'])
 
     # Algorithm selector
     parser.add_argument('--algo', type=str, default='nsga2',

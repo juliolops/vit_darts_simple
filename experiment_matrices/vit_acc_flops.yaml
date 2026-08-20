@@ -1,0 +1,31 @@
+# The four multi-objective algorithms on (best_accuracy, total_flops),
+# 3 repeats each, over the ViT attention-head pruning space.
+#
+# Prerequisite (once):
+#   python run_darts_alphas.py --output darts_alphas/vit_base_cifar10.json
+#
+# Run:      python launch.py experiment_matrices/vit_acc_flops.yaml
+# Preview:  python launch.py experiment_matrices/vit_acc_flops.yaml --dry-run
+# Resume:   python launch.py experiment_matrices/vit_acc_flops.yaml --resume
+exp_root: experiment_vit_acc_flops
+gpus: [0]
+repeats: 3
+seed_base: 42        # repeats use seeds 43, 44, 45
+
+defaults:
+  data_path: data
+  dataset: cifar10
+  config_path_dataset: dataset_configs/cifar10_vit.yaml
+  log_level: INFO
+  multi_objective: true
+  population_size: 12        # used by nsga2/nsga3/moead (ignored by moqnas)
+  num_generations: 20
+  use_cache: true
+
+experiments:
+  - {algo: moqnas, config: experiment_configs/vit/config_vit_heads.yaml, name: moqnas}
+  - {algo: nsga2,  config: experiment_configs/vit/config_vit_heads.yaml, name: nsga2}
+  - {algo: nsga3,  config: experiment_configs/vit/config_vit_heads.yaml, name: nsga3,
+     overrides: {ref_divisions: 12}}
+  - {algo: moead,  config: experiment_configs/vit/config_vit_heads.yaml, name: moead,
+     overrides: {ref_divisions: 12, moead_T: 10, moead_scalar: tchebycheff, moead_pneighbor: 0.9}}

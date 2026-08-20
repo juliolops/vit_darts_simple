@@ -16,7 +16,6 @@ import re
 
 from settings import CFG_OBJ_PATH
 from core.precision import resolve_precision
-from .cnn import model
 from utils.helpers import load_yaml, load_pkl, natural_key
 
 # Output names each metric plugin contributes to the evaluation results.
@@ -26,8 +25,6 @@ METRIC_PROVIDES = {
     'Accuracy': {'accuracy'},
     'HardwareMetrics': {'cuda_inference_time', 'total_params', 'total_flops',
                         'model_memory_usage'},
-    'ScalarizedFitness': {'scalar_multi_objective'},
-    'ValidationLossFitness': {'fitness_val_loss'},
 }
 TRAINER_BUILTIN_METRICS = {'best_accuracy', 'best_loss'}
 
@@ -74,8 +71,7 @@ class ConfigParameters(object):
             """Checks if hyperparameter search ranges are within safe, predefined limits."""
             ranges = config_file['QNAS']['params_ranges']
             allowed = {'decay': (1e-6, 1.0), 'learning_rate': (1e-6, 1.0),
-                        'momentum': (0.0, 1.0), 'weight_decay': (1e-10, 1e-1),
-                        'backbone_percentage': (0.1, 1.0)}
+                        'momentum': (0.0, 1.0), 'weight_decay': (1e-10, 1e-1)}
 
             for key, value in ranges.items():
                 limit = allowed.get(key)
@@ -86,26 +82,15 @@ class ConfigParameters(object):
                     raise ValueError(f'{key} value out of bound {limit}!')
 
         def check_fn_dict():
-            """Validates the function dictionary, checking for valid function names and probabilities."""
-            # In the 'vit' space a gene is a head-keep percentage, not a CNN
-            # block, so the entries are validated against that range instead
-            # of against the block classes in core/cnn/model.py.
-            search_space = config_file['train'].get('search_space', 'cnn')
-            available_fn = [c[0] for c in inspect.getmembers(model, inspect.isclass)]
+            """Validates the search space: every gene is a head-keep percentage."""
             fn_dict = config_file['QNAS']['function_dict']
             probs = []
 
             for name, definition in fn_dict.items():
-                if search_space == 'vit':
-                    percent = definition['params'].get('percent')
-                    if not isinstance(percent, int) or not (0 < percent <= 100):
-                        raise ValueError(
-                            f"{name}: 'percent' must be an int in (0, 100], got {percent!r}.")
-                elif definition['function'] not in available_fn:
-                    raise ValueError(f"{definition['function']} is not a valid function!")
-                for param in definition['params'].values():
-                    if not isinstance(param, int) or param < 0:
-                        raise ValueError(f"{name} has an invalid parameter: {definition['params']}!")
+                percent = definition['params'].get('percent')
+                if not isinstance(percent, int) or not (0 < percent <= 100):
+                    raise ValueError(
+                        f"{name}: 'percent' must be an int in (0, 100], got {percent!r}.")
 
                 prob_val = definition['prob']
                 probs.append(eval(prob_val) if isinstance(prob_val, str) else prob_val)
@@ -130,11 +115,10 @@ class ConfigParameters(object):
             
             'train': [('batch_size', int), ('eval_batch_size', int), ('max_epochs', int),
                     ('epochs_to_eval', int), ('optimizer', str), ('device', str),
-                    ('dataset', str),
+                    ('dataset', str), ('vit_alphas_path', str),
                     ('objectives', list), ('multi_objective', bool), ('metrics', list),
-                    ('data_augmentation', bool), ('subtract_mean', bool), ('artifacts', list),
-                    ('limit_data', bool), ('limit_data_value', int), ('backbone_name', str),
-                    ('network_config', str), ('threads', int),
+                    ('data_augmentation', bool), ('subtract_mean', bool),
+                    ('limit_data', bool), ('limit_data_value', int), ('threads', int),
                     ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),
                     ('stats_max_batches', int), ('num_workers', int),
                     ]
@@ -191,8 +175,8 @@ class ConfigParameters(object):
         self._get_fn_spec()
 
         train_override_keys = [
-            'optimizer', 'data_augmentation', 'network_config',
-            'backbone_name', 'dataset', 'data_path', 'limit_data_value',
+            'optimizer', 'data_augmentation',
+            'dataset', 'data_path', 'limit_data_value',
             'multi_objective', 'objectives', 'config_path_dataset', 'gpu_list',
             'seed', 'workers_per_gpu', 'threads', 'train_timeout',
         ]
@@ -364,22 +348,6 @@ class ConfigParameters(object):
 
         self.train_spec['experiment_path'] = self.args['experiment_path']
 
-    def _get_retrain_params(self):
-        """ Get specific parameters for the retrain phase. The keys in *self.train_spec* that
-            exist in self.args are overwritten.
-        """
-
-        self.files_spec['previous_QNAS_params'] = os.path.join(self.args['experiment_path'],
-                                                            'log_params_evolution.txt')
-        self.load_old_params()
-
-        for key in self.args.keys():
-            self.train_spec[key] = self.args[key]
-
-        self.train_spec['experiment_path'] = os.path.join(self.train_spec['experiment_path'],
-                                                        self.args['retrain_folder'])
-        del self.args['retrain_folder']
-
     def _get_common_params(self):
         """ Get parameters that are combined/calculated the same way for all phases. """
 
@@ -409,7 +377,8 @@ class ConfigParameters(object):
         elif self.phase == 'continue_evolution':
             self._get_continue_params()
         else:
-            self._get_retrain_params()
+            raise ValueError(f"Unknown phase '{self.phase}'; expected "
+                             f"'evolution' or 'continue_evolution'.")
         self._get_common_params()
         # Older saved params files lack the precision key; resolve it for
         # every phase so the trainer always finds a normalized value.
@@ -427,66 +396,6 @@ class ConfigParameters(object):
         self.QNAS_spec['params_ranges'] = eval(self.QNAS_spec['params_ranges'])
         self.fn_dict = previous_params_file['fn_dict']
     
-    def load_evolved_data(self, experiment_path: str):
-        """
-        Loads evolved data from the specified experiment path.
-
-        Parameters:
-        - experiment_path (str): The path to the experiment folder containing evolved data.
-
-        Returns:
-        None
-
-        This method reads the evolved data from the best-performing experiment folder within the specified path.
-        It extracts information such as neural network details, generation, and individual from the 'training_params.txt' file.
-
-        If the data is in an old format (generation and individual not specified in 'training_params.txt'),
-        it attempts to extract them from the folder name using a regular expression.
-
-        The extracted information is stored in the 'evolved_params' attribute of the class.
-
-        Note: This method assumes a specific folder and file structure for evolved data.
-        """
-        
-        best_so_far_link = os.path.join(experiment_path, 'best_so_far')
-        
-        if os.path.islink(best_so_far_link):
-            best_result_folder = os.readlink(best_so_far_link)
-        else:
-            experiment_folders = [f.name for f in os.scandir(experiment_path) if f.is_dir()]
-            best_result_folder = [name for name in experiment_folders if name[0].isdigit()]
-            best_result_folder = os.path.join(experiment_path, best_result_folder[0])
-            
-        with open(os.path.join(best_result_folder, 'training_params.txt'), 'r') as file:
-                best_individual_info = yaml.safe_load(file)
-        net_list = best_individual_info.get('net_list', [])
-        generation = best_individual_info.get('generation', 0)
-        individual = best_individual_info.get('individual', 0)
-        backbone_name = best_individual_info.get('backbone_name', None)
-        backbone_percentage = best_individual_info.get('backbone_percentage', 0)
-            
-        if generation == 0 and individual == 0: # only for old format
-                matches = re.search(r'(\d+)_(\d+)$', best_result_folder)
-                generation = int(matches.group(1))
-                individual = int(matches.group(2))
-
-        self.evolved_params = {'params': None, 'net': net_list, 'generation': generation, 
-                                'individual': individual, 'backbone_name':backbone_name, 
-                                'backbone_percentage':backbone_percentage}
-
-    def override_train_params(self, new_params_dict):
-        """ Override *self.train_spec* parameters with the ones in *new_params_dict*. Update
-            step parameters, in case a epoch parameter was modified.
-
-        Args:
-            new_params_dict: dict containing parameters to override/add to self.train_spec.
-        """
-
-        self.train_spec.update(new_params_dict)
-
-        # Recalculating parameters based on steps
-        self._calculate_step_params()
-
     def params_to_logfile(self, params, text_file, nested_level=0):
         """ Print dictionary *params* to a txt file with nested level formatting.
 
@@ -518,25 +427,13 @@ class ConfigParameters(object):
 
     def save_params_logfile(self):
         """ Helper function to save the parameters in a txt file. """
-        # data_dict = {key: value for key, value in self.data_info.__dict__.items()
-        #              if key != 'mean_image'}
-        
-        if self.train_spec['phase'] == 'retrain':
-            phase = 'retrain'
-            params_dict = {'evolved_params': self.evolved_params,
-                            'train': self.train_spec,
-                            'files': self.files_spec}
-                            #'train_data_info': data_dict}
-        else:
-            phase = 'evolution'
-            params_dict = {'QNAS': self.QNAS_spec,
-                            'train': self.train_spec,
-                            'files': self.files_spec,
-                            'fn_dict': self.fn_dict}
-                            #'train_data_info': data_dict}
+        params_dict = {'QNAS': self.QNAS_spec,
+                        'train': self.train_spec,
+                        'files': self.files_spec,
+                        'fn_dict': self.fn_dict}
 
         params_file_path = os.path.join(self.train_spec['experiment_path'],
-                                        f'log_params_{phase}.txt')
+                                        'log_params_evolution.txt')
 
         with open(params_file_path, mode='w') as text_file:
             self.params_to_logfile(params_dict, text_file)

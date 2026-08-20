@@ -14,9 +14,8 @@ def build_transforms(spec, data_augmentation: bool):
     # --- Heads (PIL-space ops) ---
     train_head, eval_head = [], []
 
-    # Resize only when the spec's (H, W) differs from the native size, so the
-    # CIFAR-10 CNN configs keep their exact previous pipeline while a ViT
-    # config (shape [3, 224, 224]) gets the upscale its backbone expects.
+    # Resize only when the spec's (H, W) differs from CIFAR-10's native 32x32,
+    # i.e. upscale to the 224x224 a pretrained ViT expects.
     _, height, width = spec.shape
     if (height, width) != _CIFAR_NATIVE_HW:
         resize = Resize((height, width))

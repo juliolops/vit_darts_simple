@@ -1,6 +1,5 @@
 # CIFAR-10 served at the resolution and normalization a pretrained ImageNet
-# ViT expects (224x224, ImageNet mean/std) instead of the native 32x32 used
-# by the CNN search space.
+# ViT expects: upscaled to 224x224 with ImageNet mean/std.
 name: cifar10
 family: torchvision
 shape: [3, 224, 224]

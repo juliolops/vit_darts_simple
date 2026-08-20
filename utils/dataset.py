@@ -89,7 +89,7 @@ def setup_dataset_info(params):
     Expects in params:
         - 'dataset' (str)
         - 'batch_size' (int)
-        - 'config_path_dataset' (str) -> preferred YAML path, e.g. 'dataset_configs/cifar10.yaml'
+        - 'config_path_dataset' (str) -> preferred YAML path, e.g. 'dataset_configs/cifar10_vit.yaml'
         OR
         - 'data_path' (str) with an existing 'data_info.txt' (written by the loader)
 

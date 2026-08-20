@@ -15,7 +15,7 @@ Matrix format (see experiment_matrices/*.yaml):
 
     defaults:            # args common to every cell -> --key value / --key (bool true)
       dataset: cifar10
-      config_path_dataset: dataset_configs/cifar10.yaml
+      config_path_dataset: dataset_configs/cifar10_vit.yaml
       limit_data_value: 10000
       log_level: INFO
     gpus: [0]            # GPU pool
@@ -26,7 +26,7 @@ Matrix format (see experiment_matrices/*.yaml):
     exp_root: experiment_cifar10_qfamily
     experiments:
       - algo: moqnas
-        config: experiment_configs/cifar_mo/config0_2.yaml
+        config: experiment_configs/vit/config_vit_heads.yaml
         name: exp10
         overrides: {optimizer: AdamW}     # per-cell args (override defaults)
         flags: [--multi_objective]        # literal flags appended verbatim

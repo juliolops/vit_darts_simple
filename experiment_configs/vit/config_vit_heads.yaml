@@ -34,8 +34,8 @@ QNAS:
     rank_weighting: True
     initial_prob_distribution: uniform
 
-    # --- Architecture rules (CNN-specific; inert in the ViT space, where
-    # every gene is a valid percentage and there is no terminal/pool op) ---
+    # --- Architecture rules: inert here, since every gene is a valid
+    # percentage and there is no terminal/pool operation to guard ---
     terminal_op_name: "heads_20"
     pool_op_name: "none"
     min_active_len: 1
@@ -76,8 +76,7 @@ QNAS:
                      'heads_90': {'params': {'percent': 90}, 'prob': 1.0/8.0}}
 
 train:
-    # --- ViT search space ---
-    search_space: vit
+    # --- ViT ---
     vit_model_name: vit_base_patch16_224
     vit_pretrained: true
     vit_alphas_path: darts_alphas/vit_base_cifar10.json
@@ -109,10 +108,6 @@ train:
     threads: 1               # MPS is a single shared GPU
     train_timeout: 3600
 
-    # Required by the config schema; unused in the ViT space.
-    network_config: default
-    backbone_name: mobilenet_v3_small
-
     # Multi-objective: accuracy up, FLOPs down
     multi_objective: True
     num_objectives: 2
@@ -120,4 +115,3 @@ train:
     metrics:
       - name: Accuracy
       - name: HardwareMetrics
-    artifacts: []

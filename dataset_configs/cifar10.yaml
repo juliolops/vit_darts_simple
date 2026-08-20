@@ -1,8 +1,0 @@
-name: cifar10
-family: torchvision
-shape: [3, 32, 32]
-num_classes: 10
-mean: [0.4914, 0.4822, 0.4465]
-std:  [0.2470, 0.2435, 0.2616]
-task: classification
-stats_mode: known

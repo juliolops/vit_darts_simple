@@ -11,7 +11,7 @@ import time
 import copy
 from typing import Dict, Any, List
 import torch.multiprocessing as mp
-from .cnn import input, master
+from .training import input, master
 from utils.helpers import init_log, setup_dataset_info
 from utils.seeding import seed_candidate
 
