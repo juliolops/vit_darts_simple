@@ -117,9 +117,14 @@ def main(**args):
     if args.get('num_generations') is None:
         args['num_generations'] = 50  # nsga2/nsga3/moead default; moqnas uses the config value
 
-    # If fn_list wasn’t set via CLI, fall back to config
+    # If fn_list / max_num_nodes weren't set via CLI, fall back to the config.
+    # max_num_nodes is the chromosome length, which the ViT space ties to the
+    # transformer block count — a stale CLI default would silently add genes
+    # that decode to nothing.
     if args.get('fn_list') is None:
         args['fn_list'] = config.QNAS_spec.get('fn_list')
+    if args.get('max_num_nodes') is None:
+        args['max_num_nodes'] = config.QNAS_spec['max_num_nodes']
 
     # -------- Instantiate the engine --------
     if algo == 'nsga3':
@@ -271,7 +276,9 @@ if __name__ == '__main__':
     parser.add_argument('--num_generations', type=int, default=None,
                         help='Number of generations. Defaults: 50 for nsga2/nsga3/moead; '
                              'config max_generations for moqnas (CLI value overrides it).')
-    parser.add_argument('--max_num_nodes', type=int, default=20)
+    parser.add_argument('--max_num_nodes', type=int, default=None,
+                        help='Chromosome length. Defaults to QNAS.max_num_nodes '
+                             'from the config file.')
     parser.add_argument('--fn_list', nargs='+', type=str, default=None,
                         help='Layer/op names used to decode chromosomes (fallback to config).')
     parser.add_argument('--crossover_rate', type=float, default=0.9)

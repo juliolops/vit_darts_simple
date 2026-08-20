@@ -248,8 +248,18 @@ class ModelMetrics:
             if isinstance(module, nn.Linear):
                 in_f = module.in_features
                 out_f = module.out_features
-                batch = tout.shape[0] if tout is not None and hasattr(tout, "shape") and len(tout.shape) >= 1 else 1
-                return int(in_f * out_f * batch * 2)
+                # A Linear is applied once per "row" of its input, i.e. to
+                # every leading dimension except the feature one. For a CNN
+                # head the output is (B, out_f) so this is just B, but for a
+                # transformer it is (B, tokens, out_f) — counting only B there
+                # under-counts by the sequence length.
+                if tout is not None and hasattr(tout, "shape") and len(tout.shape) >= 1:
+                    rows = 1
+                    for dim in tout.shape[:-1]:
+                        rows *= int(dim)
+                else:
+                    rows = 1
+                return int(in_f * out_f * rows * 2)
 
             # Other layers not counted
             return 0

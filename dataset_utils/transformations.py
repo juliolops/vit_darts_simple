@@ -1,5 +1,10 @@
 # dataset_utils/transformations.py
-from torchvision.transforms import Compose, ToTensor, Normalize, TrivialAugmentWide
+from torchvision.transforms import Compose, ToTensor, Normalize, Resize, TrivialAugmentWide
+
+# Native resolution of the raw dataset images; a spec asking for anything
+# larger (e.g. 224 for a ViT) gets an explicit Resize.
+_CIFAR_NATIVE_HW = (32, 32)
+
 
 def build_transforms(spec, data_augmentation: bool):
     """
@@ -7,11 +12,19 @@ def build_transforms(spec, data_augmentation: bool):
     Return: (train_transform, eval_transform)
     """
     # --- Heads (PIL-space ops) ---
-    # Generic datasets (cifar10): optionally add light augmentation to train.
     train_head, eval_head = [], []
+
+    # Resize only when the spec's (H, W) differs from the native size, so the
+    # CIFAR-10 CNN configs keep their exact previous pipeline while a ViT
+    # config (shape [3, 224, 224]) gets the upscale its backbone expects.
+    _, height, width = spec.shape
+    if (height, width) != _CIFAR_NATIVE_HW:
+        resize = Resize((height, width))
+        train_head.append(resize)
+        eval_head.append(resize)
+
     if data_augmentation:
         train_head.append(TrivialAugmentWide(num_magnitude_bins=31))
-    # eval_head stays empty (identity) unless you add dataset-specific geometry
 
     # --- Shared tail (tensor-space ops) ---
     tail = [ToTensor()]

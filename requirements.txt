@@ -2,3 +2,4 @@ scikit-learn
 PyYAML==6.0.1
 pynvml
 pymoo
+timm

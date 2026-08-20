@@ -212,19 +212,58 @@ pip install torch torchvision torchaudio
 pip install -r requirements.txt
 ```
 
-## ViT attention-head search (`vit_transformer_search.py`)
+## ViT attention-head pruning (DARTS + multi-objective GA)
 
-A separate, self-contained script that runs a DARTS-style search over which
-attention heads of a pretrained `vit_base_patch16_224` (via `timm`) matter
-most for CIFAR-10, learning a softmax weighting (`alphas`) per block while
-fine-tuning the MLP heads. It does not use anything from the rest of this
-repo (no `core/`, `algorithms/`, or config files) and picks CUDA/MPS/CPU
-automatically.
+A second search space, on top of the same evolutionary engines: instead of
+building a CNN from scratch, it **prunes attention heads** of a pretrained
+`vit_base_patch16_224`, trading accuracy against FLOPs. It runs in two
+phases.
+
+**How the two phases split the decision:** DARTS decides *which* heads
+matter (a per-head importance, the alphas); the genetic algorithm decides
+*how much* to prune per block. A chromosome has one gene per transformer
+block (12 for `vit_base_patch16_224`), and each gene is the **percentage of
+heads that block keeps** — 20% to 90%, in steps of 10. A gene of 40% keeps
+the 40% of that block's heads with the largest alpha.
+
+Pruning is surgical, not masking: the block's `qkv`/`proj` layers are
+rebuilt holding only the surviving heads, so a pruned candidate really is
+smaller and cheaper. Each candidate is then fine-tuned with **only the
+classifier head trainable**, so its accuracy reflects the pruned
+representation rather than a full retraining of the backbone.
+
+### Phase 1 — learn the alphas (DARTS)
 
 ```bash
 pip install timm
-python vit_transformer_search.py
+python run_darts_alphas.py --epochs 1 --limit_train 2000 \
+    --output darts_alphas/vit_base_cifar10.json
 ```
+
+Reuses [`vit_transformer_search.py`](vit_transformer_search.py) (unchanged)
+and writes one alpha per head, per block, to JSON. Run once; every search
+below reuses the file.
+
+### Phase 2 — multi-objective search over the pruning percentages
+
+```bash
+python run_all_evolution.py \
+    --algo nsga3 \
+    --config_file experiment_configs/vit/config_vit_heads.yaml \
+    --experiment_path experiment_vit/nsga3/run1 \
+    --data_path data --dataset cifar10 \
+    --config_path_dataset dataset_configs/cifar10_vit.yaml \
+    --population_size 12 --num_generations 20 \
+    --multi_objective --seed 42 --log_level INFO
+```
+
+Objectives are `[best_accuracy, total_flops]` — accuracy up, FLOPs down —
+so the result is a Pareto front of pruning configurations. The dataset
+config is `cifar10_vit.yaml` (224×224 + ImageNet normalization, what the
+pretrained ViT expects), not the 32×32 `cifar10.yaml` used by the CNN space.
+
+`vit_transformer_search.py` also still runs standalone (`python
+vit_transformer_search.py`) as the original self-contained DARTS demo.
 
 ## License
 

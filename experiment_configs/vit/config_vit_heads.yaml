@@ -1,0 +1,123 @@
+# Multi-objective search over ViT attention-head pruning (CIFAR-10).
+#
+# Chromosome: one gene per transformer block (max_num_nodes = 12 for
+# vit_base_patch16_224). Each gene is the PERCENTAGE of attention heads that
+# block keeps; which heads survive is decided by the DARTS alphas computed
+# beforehand (run_darts_alphas.py) — a gene of 40% keeps the 40% of heads
+# with the largest alpha. Search space: 20% to 90% in steps of 10.
+#
+# Objectives: accuracy (up) vs FLOPs (down). Every candidate is fine-tuned
+# with ONLY the classifier head trainable, so accuracy reflects the pruned
+# representation rather than a full retraining of the backbone.
+#
+# Prerequisite:
+#   python run_darts_alphas.py --output darts_alphas/vit_base_cifar10.json
+
+QNAS:
+    crossover_rate: 0.5
+    max_generations: 20
+    max_num_nodes: 12          # one gene per transformer block
+    num_quantum_ind: 5
+    penalize_number: 0
+    repetition: 4
+    replace_method: best
+    update_quantum_gen: 1
+    crossover_frequency: 1
+    pop_crossover_rate: 0.4
+    pop_crossover_method: ['hux', 'one_point', 'two_point']
+    mo_crossover_strategy: directional
+    patience: 60
+    elite_mode: global_k
+    k_elites: 5
+    pool_factor: 3
+    ema_beta: 0.7
+    rank_weighting: True
+    initial_prob_distribution: uniform
+
+    # --- Architecture rules (CNN-specific; inert in the ViT space, where
+    # every gene is a valid percentage and there is no terminal/pool op) ---
+    terminal_op_name: "heads_20"
+    pool_op_name: "none"
+    min_active_len: 1
+    truncate_after_noop: false
+    avoid_consecutive_pool: false
+    enforce_noop_in_update: false
+    noop_max_prob: 0.9
+    noop_ramp_cap: false
+
+    quantum_update_config:
+      quantum_rate_schedule: 'cosine'
+      max_update_schedule: 'cosine'
+      static_quantum_rate: 0.1
+      static_max_update: 0.05
+      quantum_rate_schedule_params:
+          start: 0.25
+          end: 0.1
+      max_update_schedule_params:
+          start: 1.0
+          end: 0.8
+      intensity_min: 0.5
+      intensity_max: 1.0
+
+    params_ranges:
+      decay: 0.9
+      learning_rate: 0.001
+      momentum: 0.0
+      weight_decay: 1.0e-4
+
+    # Search space: percentage of attention heads kept per block, 20%..90%.
+    function_dict:  {'heads_20': {'params': {'percent': 20}, 'prob': 1.0/8.0},
+                     'heads_30': {'params': {'percent': 30}, 'prob': 1.0/8.0},
+                     'heads_40': {'params': {'percent': 40}, 'prob': 1.0/8.0},
+                     'heads_50': {'params': {'percent': 50}, 'prob': 1.0/8.0},
+                     'heads_60': {'params': {'percent': 60}, 'prob': 1.0/8.0},
+                     'heads_70': {'params': {'percent': 70}, 'prob': 1.0/8.0},
+                     'heads_80': {'params': {'percent': 80}, 'prob': 1.0/8.0},
+                     'heads_90': {'params': {'percent': 90}, 'prob': 1.0/8.0}}
+
+train:
+    # --- ViT search space ---
+    search_space: vit
+    vit_model_name: vit_base_patch16_224
+    vit_pretrained: true
+    vit_alphas_path: darts_alphas/vit_base_cifar10.json
+
+    batch_size: 32
+    eval_batch_size: 32
+    max_epochs: 3          # head-only fine-tune: a few epochs is enough
+    epochs_to_eval: 2
+    eval_window_agg: mean
+    optimizer: AdamW
+    precision: fp32
+    device: cpu            # informational; the worker picks cuda/mps/cpu
+
+    # Dataset (224x224 + ImageNet normalization for the pretrained ViT)
+    dataset: Cifar10
+    config_path_dataset: dataset_configs/cifar10_vit.yaml
+    data_path: data
+    train_split: 0.9
+    split_seed: 2025
+    loader_seed: 777
+    download: true
+    stats_max_batches: 10
+    data_augmentation: false
+    subtract_mean: true
+    limit_data: true
+    limit_data_value: 1000   # small subset keeps a laptop run feasible
+    num_workers: 2
+
+    threads: 1               # MPS is a single shared GPU
+    train_timeout: 3600
+
+    # Required by the config schema; unused in the ViT space.
+    network_config: default
+    backbone_name: mobilenet_v3_small
+
+    # Multi-objective: accuracy up, FLOPs down
+    multi_objective: True
+    num_objectives: 2
+    objectives: ['best_accuracy', 'total_flops']
+    metrics:
+      - name: Accuracy
+      - name: HardwareMetrics
+    artifacts: []

@@ -150,16 +150,20 @@ def create_optimizer(net, params):
             raise ValueError(f"Unsupported optimizer: {params.get('optimizer')}")
 
     # ---- Non-backbone fallback: single param group, safe defaults ----
+    # Only trainable parameters: in the ViT space everything but the
+    # classifier head is frozen, so handing the optimizer the frozen tensors
+    # would just waste optimizer state on parameters that never get a grad.
+    trainable = [p for p in net.parameters() if p.requires_grad]
     if opt_name == 'adamw':
-        return torch.optim.AdamW(net.parameters(), lr=base_lr, weight_decay=weight_decay)
+        return torch.optim.AdamW(trainable, lr=base_lr, weight_decay=weight_decay)
     elif opt_name == 'adam':
-        return torch.optim.Adam(net.parameters(), lr=base_lr, weight_decay=weight_decay)
+        return torch.optim.Adam(trainable, lr=base_lr, weight_decay=weight_decay)
     elif opt_name == 'sgd':
         momentum = float(params.get('momentum', 0.9))
         nesterov = bool(params.get('nesterov', True))
-        return torch.optim.SGD(net.parameters(), lr=base_lr, momentum=momentum, nesterov=nesterov, weight_decay=weight_decay)
+        return torch.optim.SGD(trainable, lr=base_lr, momentum=momentum, nesterov=nesterov, weight_decay=weight_decay)
     elif opt_name == 'rmsprop':
-        return torch.optim.RMSprop(net.parameters(), lr=base_lr, weight_decay=weight_decay)
+        return torch.optim.RMSprop(trainable, lr=base_lr, weight_decay=weight_decay)
     else:
         raise ValueError(f"Unsupported optimizer: {params.get('optimizer')}")
 
@@ -195,6 +199,20 @@ def create_model(params: Dict[str, Any]) -> nn.Module:
     Creates and initializes a model instance based on the provided parameters.
     This function is responsible for building the network graph and initializing it.
     """
+    if params.get('search_space', 'cnn') == 'vit':
+        # ViT space: the chromosome carries a head-keep percentage per block;
+        # which heads survive comes from the DARTS alphas, not the GA.
+        from core.vit import build_pruned_vit, load_alphas  # local: keeps timm optional
+        alphas = load_alphas(params['vit_alphas_path'])
+        return build_pruned_vit(
+            net_list=params['net_list'],
+            fn_dict=params['fn_dict'],
+            alphas=alphas,
+            num_classes=params['num_classes'],
+            model_name=params.get('vit_model_name', 'vit_base_patch16_224'),
+            pretrained=params.get('vit_pretrained', True),
+        )
+
     net = model.NetworkGraph(num_classes=params['num_classes'],
                             input_shape=params['input_shape'],
                             network_config=params['network_config'],

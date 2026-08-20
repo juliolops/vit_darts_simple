@@ -214,3 +214,6 @@ logs/
 
 venv/
 .venv/
+
+# DARTS alphas are a run artifact (regenerate with run_darts_alphas.py)
+darts_alphas/

@@ -87,17 +87,26 @@ class ConfigParameters(object):
 
         def check_fn_dict():
             """Validates the function dictionary, checking for valid function names and probabilities."""
+            # In the 'vit' space a gene is a head-keep percentage, not a CNN
+            # block, so the entries are validated against that range instead
+            # of against the block classes in core/cnn/model.py.
+            search_space = config_file['train'].get('search_space', 'cnn')
             available_fn = [c[0] for c in inspect.getmembers(model, inspect.isclass)]
             fn_dict = config_file['QNAS']['function_dict']
             probs = []
 
             for name, definition in fn_dict.items():
-                if definition['function'] not in available_fn:
+                if search_space == 'vit':
+                    percent = definition['params'].get('percent')
+                    if not isinstance(percent, int) or not (0 < percent <= 100):
+                        raise ValueError(
+                            f"{name}: 'percent' must be an int in (0, 100], got {percent!r}.")
+                elif definition['function'] not in available_fn:
                     raise ValueError(f"{definition['function']} is not a valid function!")
                 for param in definition['params'].values():
                     if not isinstance(param, int) or param < 0:
                         raise ValueError(f"{name} has an invalid parameter: {definition['params']}!")
-                
+
                 prob_val = definition['prob']
                 probs.append(eval(prob_val) if isinstance(prob_val, str) else prob_val)
 
