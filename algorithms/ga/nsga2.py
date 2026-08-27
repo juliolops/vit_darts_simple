@@ -295,8 +295,8 @@ class NSGA2(GA):
         curr_ids = self.population_ids
         if self.pareto_global_population is None:
             # If the archive is empty, initialize it with the current population.
-            all_pop = self.population.copy() # In MOQNAS, self.classical_nets
-            all_fits = self.fitnesses.copy() # In MOQNAS, self.fits
+            all_pop = self.population.copy()
+            all_fits = self.fitnesses.copy()
             all_params = self.classical_params.copy() if hasattr(self, 'classical_params') else None
             all_ids = curr_ids.copy()
         else:

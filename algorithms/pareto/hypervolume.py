@@ -1,7 +1,7 @@
 """Hypervolume computation for mixed max/min objective fronts.
 
 Canonical ``compute_hypervolume_mixed`` extracted from the class
-implementations in ``algorithms/ga/nsga2.py`` / ``algorithms/qnas/moqnas.py``
+implementation in ``algorithms/ga/nsga2.py``
 (code-identical; only their docstrings differed), parametrized by
 ``objective_senses`` instead of reading ``self.objective_senses``. The
 deprecated standalone in ``utils/visualization.py`` is NOT the source:

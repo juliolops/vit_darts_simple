@@ -1,13 +1,13 @@
 """Reference-direction utilities shared by NSGA-III and MOEA/D.
 
 ``simplex_lattice`` and ``to_minimization`` extracted from
-``algorithms/ga/nsga3.py`` (the moead copies differ only cosmetically:
+``algorithms/ga/nsga3.py`` (an earlier MOEA/D copy differed only cosmetically:
 docstrings, joined statements and a parameter name; the executable logic
 is identical), parametrized instead of reading ``self``.
 
 ``_build_reference_directions`` is deliberately NOT consolidated here:
 the nsga3 version never prunes the lattice (extra directions are kept
-for better spread), while the moead version prunes down to the requested
+for better spread), while that version pruned down to the requested
 population size with a random ``np.random.choice``. The two behaviors
 diverge, so each algorithm keeps its own implementation.
 """

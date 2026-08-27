@@ -82,37 +82,17 @@ class ConfigParameters(object):
                     raise ValueError(f'{key} value out of bound {limit}!')
 
         def check_fn_dict():
-            """Validates the search space: every gene is a head-keep percentage."""
-            fn_dict = config_file['QNAS']['function_dict']
-            probs = []
-
-            for name, definition in fn_dict.items():
+            """Validates the search space: every gene is a keep percentage."""
+            for name, definition in config_file['QNAS']['function_dict'].items():
                 percent = definition['params'].get('percent')
                 if not isinstance(percent, int) or not (0 < percent <= 100):
                     raise ValueError(
                         f"{name}: 'percent' must be an int in (0, 100], got {percent!r}.")
 
-                prob_val = definition['prob']
-                probs.append(eval(prob_val) if isinstance(prob_val, str) else prob_val)
-
-            if any(p is not None for p in probs):
-                prob_sum = np.sum([p for p in probs if p is not None])
-                if not np.isclose(prob_sum, 1.0):
-                    raise ValueError(f"Function probabilities should sum to 1.0, but sum to {prob_sum}.")
-
         vars_dict = {
-            'QNAS': [('crossover_rate', float), ('max_generations', int), ('max_num_nodes', int),
-                    ('num_quantum_ind', int), ('penalize_number', int), ('repetition', int),
-                    ('replace_method', str), ('quantum_update_config', dict), ('update_quantum_gen', int),
-                    ('params_ranges', dict), ('patience', int),
-                    ('crossover_frequency', int), ('pop_crossover_rate', float), ('pop_crossover_method', list),
-                    ('mo_crossover_strategy', str), ('elite_mode', str), ('k_elites', int), ('pool_factor', int),
-                    ('ema_beta', float), ('rank_weighting', bool),
-                    ('initial_prob_distribution', str), ('function_dict', dict),
-                    ('terminal_op_name', str), ('pool_op_name', str), ('min_active_len', int),
-                    ('truncate_after_noop', bool), ('avoid_consecutive_pool', bool), ('enforce_noop_in_update', bool),
-                    ('noop_max_prob', float), ('noop_ramp_cap', bool)],
-            
+            'QNAS': [('max_num_nodes', int), ('function_dict', dict),
+                    ('params_ranges', dict)],
+
             'train': [('batch_size', int), ('eval_batch_size', int), ('max_epochs', int),
                     ('epochs_to_eval', int), ('optimizer', str), ('device', str),
                     ('dataset', str), ('vit_alphas_path', str),
@@ -164,14 +144,6 @@ class ConfigParameters(object):
 
         ranges = self._get_ranges(config_file)
         self.QNAS_spec['params_ranges'] = OrderedDict(sorted(ranges.items()))
-        self.QNAS_spec['early_stopping'] = self.args.get('early_stopping')
-        self.QNAS_spec['en_pop_crossover'] = self.args.get('en_pop_crossover')
-        self.QNAS_spec['elite_mode'] = self.args.get('elite_mode', 'global_k')
-        self.QNAS_spec['truncate_after_noop'] = self.args.get('truncate_after_noop', True)
-        self.QNAS_spec['avoid_consecutive_pool'] = self.args.get('avoid_consecutive_pool', True)
-        self.QNAS_spec['enforce_noop_in_update'] = self.args.get('enforce_noop_in_update', True)
-        if self.train_spec['multi_objective']:
-            self.QNAS_spec['ref_dir_method'] = self.args.get('ref_dir_method', 'das-dennis')
         self._get_fn_spec()
 
         train_override_keys = [
@@ -205,7 +177,7 @@ class ConfigParameters(object):
         1. Sense resolution: every objective name must match exactly one key
            of ``dataset_configs/cfg_obj.json`` under the same substring rule
            the algorithms use (``key in objective``). Zero matches used to be
-           a silently-ignored warning in NSGA2/MOQNAS that left
+           a silently-ignored warning that left
            ``objective_senses`` shorter than the fitness matrix, flipping the
            wrong columns; more than one match is ambiguous.
         2. Producibility: every objective must be provided by the trainer
@@ -256,55 +228,19 @@ class ConfigParameters(object):
                     f"Producible names: {sorted(providable)}")
 
     def _get_fn_spec(self):
-        """
-        Organize function specifications for QNAS.
-        
-        This method now supports a new parameter `initial_prob_distribution`
-        in the QNAS config, which can be 'from_config' or 'uniform'.
+        """Build the ordered gene vocabulary the GA decodes chromosomes with.
+
+        ``fn_list`` is the sorted list of gene names; ``fn_dict`` maps each name
+        to its parameters. Sorting is by natural key, so ``heads_20 ...
+        heads_90`` come out in ascending order and a +/-1 index mutation is a
+        one-step change in the pruning percentage.
         """
         self.QNAS_spec['fn_list'] = sorted(
             self.QNAS_spec['function_dict'].keys(), key=natural_key
         )
         self.fn_dict = self.QNAS_spec.pop('function_dict')
-        self.QNAS_spec['initial_probs'] = []
-        self.QNAS_spec['reducing_fns_list'] = []
-
-        # Get the desired distribution method. Default to 'from_config' if not specified.
-        prob_distribution_method = self.QNAS_spec.get('initial_prob_distribution', 'from_config')
-        
-        self.QNAS_spec.pop('initial_prob_distribution', None)
-
-        # Conditionally populate the initial_probs list based on the chosen method.
-        if prob_distribution_method == 'from_config':
-            print("INFO: Initializing probabilities from the configuration file.")
-            for fn in self.QNAS_spec['fn_list']:
-                if type(self.fn_dict[fn]['prob']) == str:
-                    prob = eval(self.fn_dict[fn]['prob'])
-                else:
-                    prob = self.fn_dict[fn]['prob']
-                
-                if prob is not None:
-                    self.QNAS_spec['initial_probs'].append(prob)
-        
-        elif prob_distribution_method == 'uniform':
-            # By leaving `initial_probs` as an empty list, we signal the QPopulationNetwork
-            # class to create its own uniform distribution.
-            print("INFO: Using a uniform initial probability distribution for all operators.")
-            pass # Keep self.QNAS_spec['initial_probs'] as []
-
-        else:
-            raise ValueError(f"Unknown initial_prob_distribution: '{prob_distribution_method}'. "
-                            f"Please use 'from_config' or 'uniform'.")
-
-        # The rest of the function remains the same.
-        # It populates the reducing functions list independently of the probabilities.
-        for fn in self.QNAS_spec['fn_list']:
-            strides = self.fn_dict[fn]['params'].get('strides')
-            if strides and strides > 1:
-                self.QNAS_spec['reducing_fns_list'].append(fn)
-                
         for item in self.fn_dict.values():
-            del item['prob']
+            item.pop('prob', None)
 
     def _get_ranges(self, config_file):
         """  Get the ranges of the numerical parameters to be evolved.

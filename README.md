@@ -2,7 +2,7 @@
 
 This repository searches for **pruned Vision Transformers** on **CIFAR-10**, trading **accuracy** against **hardware cost** (FLOPs, parameter count, inference time). It runs in two phases: DARTS learns which attention heads matter, then a multi-objective genetic algorithm decides how aggressively to prune each block.
 
-The search compares a Quantum-Inspired Evolutionary Algorithm (MO-QNAS) against classic Pareto/decomposition-based Genetic Algorithms (NSGA-II, NSGA-III, MOEA/D).
+The search algorithm is **NSGA-III**: Pareto dominance with reference-direction niching.
 
 ## How it works
 
@@ -15,25 +15,20 @@ Pruning is **surgical, not masking**: the block's `qkv`/`proj` layers are rebuil
 
 ## Features
 
-- **Four multi-objective search algorithms:**
-  - **Multi-Objective QNAS (MO-QNAS)** — quantum-inspired probability-distribution search.
-  - **NSGA-II** — Pareto dominance + crowding distance.
-  - **NSGA-III** — Pareto dominance + reference-direction niching (better for ≥3 objectives).
-  - **MOEA/D** — decomposition into scalar subproblems over a neighborhood of weight vectors.
+- **NSGA-III** — Pareto dominance with reference-direction niching, which keeps the front evenly covered and scales to three or more objectives. It inherits its evaluation, Pareto archive and checkpointing from the `NSGA2` base class in `algorithms/ga/nsga2.py`.
 - **Configurable objectives:** any combination of accuracy, FLOPs, parameter count and measured inference time, declared per experiment and validated at startup.
 - **Experiment-Matrix Launcher:** `launch.py` expands a YAML matrix into one run per (experiment × repeat), schedules them across GPU slots, and assigns an explicit seed to every repeat for reproducibility.
 - **Selectable Training Precision:** `fp32`, `fp16`, or `bf16` from the config.
 - **Runs on CUDA, Apple Silicon (MPS), or CPU** — the evaluation engine picks the best available device automatically (CUDA → MPS → CPU); MPS is a single shared GPU, so use a small `--threads`/`workers_per_gpu` there.
 - **Evaluation Cache:** an optional cache reuses the metrics of candidates already evaluated.
-- **Checkpointing & Resume:** every algorithm saves its full search state (population, Pareto archive, algorithm-specific state, and all RNG) at every generation, and can resume an interrupted run bit-identically.
+- **Checkpointing & Resume:** the search saves its full state (population, Pareto archive, reference directions, and all RNG) at every generation, and can resume an interrupted run bit-identically.
 
 ## Project Structure
 
 ```
 ├── algorithms/
-│   ├── ga/                       # NSGA-II, NSGA-III, MOEA/D (+ shared GA infrastructure)
-│   ├── pareto/                    # Shared Pareto operators (dominance, diversity, hypervolume)
-│   └── qnas/                      # MO-QNAS (+ shared QNAS infrastructure)
+│   ├── ga/                        # NSGA-III (nsga3.py) over its NSGA2/GA base classes
+│   └── pareto/                    # Pareto operators (dominance, diversity, hypervolume)
 │
 ├── core/
 │   ├── vit.py                     # ViT head pruning + DARTS alphas (the search space)
@@ -94,7 +89,7 @@ python run_all_evolution.py \
 
 Key flags:
 
-- `--algo`: Algorithm to run (`nsga2`, `nsga3`, `moead`, `moqnas`).
+- `--algo`: Only `nsga3` is available; the flag is kept so existing commands keep working.
 - `--config_file`: Experiment config (`experiment_configs/vit/...`).
 - `--config_path_dataset`: Dataset metadata YAML (`dataset_configs/cifar10_vit.yaml`).
 - `--experiment_path`: Directory where logs and results are saved.

@@ -8,9 +8,7 @@ from core.eval_cache import CachedEvaluator, compute_fingerprint
 from utils.helpers import check_files, init_log, download_dataset
 from utils.seeding import set_global_seeds
 
-from algorithms.qnas.moqnas import MOQNAS
-from algorithms.ga import nsga2, nsga3
-from algorithms.ga import moead
+from algorithms.ga import nsga3
 
 
 def _bootstrap(logger, args) -> Tuple[object, object, str]:
@@ -40,14 +38,6 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
     config = cfg.ConfigParameters(args, phase=phase)
     config.get_parameters()
 
-    # moqnas reads generations from the config; let the CLI flag win.
-    # Must happen before save_params_logfile so continue_evolution (which
-    # reloads the saved params) sees the overridden value.
-    if args.get('num_generations') is not None and args.get('algo', '').lower() == 'moqnas':
-        logger.info(f"Overriding config max_generations ({config.QNAS_spec.get('max_generations')}) "
-                    f"with --num_generations {args['num_generations']}")
-        config.QNAS_spec['max_generations'] = args['num_generations']
-
     logger.info(f"Saving parameters for {config.phase} phase ...")
     config.save_params_logfile()
 
@@ -64,8 +54,8 @@ def _bootstrap(logger, args) -> Tuple[object, object, str]:
         log_level=config.train_spec['log_level']
     )
     if args.get('use_cache'):
-        # Unified cache (core/eval_cache.py) wraps the evaluator for EVERY
-        # algorithm, moqnas included; the legacy per-algorithm caches stay off.
+        # Unified cache (core/eval_cache.py) wraps the evaluator; the legacy
+        # per-algorithm cache stays off.
         noop_names = frozenset(
             name for name, spec in config.fn_dict.items()
             if spec.get('function') == 'NoOp'
@@ -108,14 +98,8 @@ def main(**args):
     logger.info(f"Global seed set to {args.get('seed', 42)}")
     config, eval_pop, _ = _bootstrap(logger, args)
 
-    algo = args.get('algo', 'nsga2').lower()
-    logger.info(f"Selected algorithm: {algo}")
-
-    if args.get('resume') and algo not in ('moqnas', 'nsga2', 'nsga3', 'moead'):
-        raise ValueError(f"--resume is not supported for --algo {algo}.")
-
     if args.get('num_generations') is None:
-        args['num_generations'] = 50  # nsga2/nsga3/moead default; moqnas uses the config value
+        args['num_generations'] = 50
 
     # If fn_list / max_num_nodes weren't set via CLI, fall back to the config.
     # max_num_nodes is the chromosome length, which the ViT space ties to the
@@ -127,77 +111,19 @@ def main(**args):
         args['max_num_nodes'] = config.QNAS_spec['max_num_nodes']
 
     # -------- Instantiate the engine --------
-    if algo == 'nsga3':
-        if nsga3 is None:
-            raise ImportError("algorithms.ga.nsga3 not found.")
-        logger.info("Using NSGA-III.")
-        engine = nsga3.NSGA3(
-            eval_pop,
-            config.train_spec['experiment_path'],
-            objectives=config.train_spec['objectives'],
-            log_file=config.files_spec['log_file'],
-            log_level=config.train_spec['log_level'],
-            data_file=config.files_spec['data_file'],
-            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
-            ref_divisions=args.get('ref_divisions', None),
-        )
+    logger.info("Using NSGA-III.")
+    engine = nsga3.NSGA3(
+        eval_pop,
+        config.train_spec['experiment_path'],
+        objectives=config.train_spec['objectives'],
+        log_file=config.files_spec['log_file'],
+        log_level=config.train_spec['log_level'],
+        data_file=config.files_spec['data_file'],
+        use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
+        ref_divisions=args.get('ref_divisions', None),
+    )
 
-    elif algo == 'nsga2':
-        if nsga2 is None:
-            raise ImportError("algorithms.ga.nsga2 not found.")
-        logger.info("Using NSGA-II.")
-        engine = nsga2.NSGA2(
-            eval_func=eval_pop,
-            experiment_path=config.train_spec['experiment_path'],
-            objectives=config.train_spec['objectives'],
-            log_file=config.files_spec['log_file'],
-            log_level=config.train_spec['log_level'],
-            data_file=config.files_spec['data_file'],
-            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
-        )
-    elif algo == 'moead':
-        if moead is None:
-            raise ImportError("algorithms.ga.moead not found.")
-        logger.info("Using MOEA/D.")
-        engine = moead.MOEAD(
-            eval_func=eval_pop,
-            experiment_path=config.train_spec['experiment_path'],
-            objectives=config.train_spec['objectives'],
-            log_file=config.files_spec['log_file'],
-            log_level=config.train_spec['log_level'],
-            data_file=config.files_spec['data_file'],
-            use_cache=False,  # unified cache wraps eval_pop (core/eval_cache.py)
-            divisions=args.get('ref_divisions', None),          # reuse NSGA-III arg name
-            T=args.get('moead_T', 20),
-            scalar_method=args.get('moead_scalar', 'tchebycheff'),
-            prob_neighbor_mating=args.get('moead_pneighbor', 0.9),
-        )
-    elif algo == 'moqnas':
-        if MOQNAS is None:
-            raise ImportError("algorithms.qnas.moqnas.MOQNAS not found.")
-        logger.info("Using MO-QNAS.")
-        engine = MOQNAS(
-            eval_func=eval_pop,
-            experiment_path=config.train_spec['experiment_path'],
-            objectives=config.train_spec['objectives'],
-            log_file=config.files_spec['log_file'],
-            log_level=config.train_spec['log_level'],
-            data_file=config.files_spec['data_file'],
-        )
-        # Special initializer for MO-QNAS
-        engine.initialize_moqnas(**config.QNAS_spec)
-
-        _setup_checkpoint(engine, config, args, logger)
-
-        logger.info("Starting MO-QNAS evolution ...")
-        engine.evolve()
-        logger.info("MO-QNAS evolution finished.")
-        return
-
-    else:
-        raise ValueError("Unknown --algo. Choose from: nsga2, nsga3, moead, moqnas.")
-
-    # -------- Shared GA-style init (NSGA-II / NSGA-III / MOEA-D) --------
+    # -------- GA-style init --------
     engine.initialize_ga(
         population_size=args['population_size'],
         num_generations=args['num_generations'],
@@ -257,20 +183,17 @@ if __name__ == '__main__':
                         choices=['best_accuracy', 'best_loss', 'scalar_multi_objective'])
     parser.add_argument('--data_augmentation', action='store_true')
     parser.add_argument('--early_stopping', action='store_true')
-    parser.add_argument('--en_pop_crossover', action='store_true')
     parser.add_argument('--save_checkpoints_epochs', type=int, default=5)
     parser.add_argument('--limit_data_value', type=int, default=10000)
 
-    # Algorithm selector
-    parser.add_argument('--algo', type=str, default='nsga2',
-                        choices=['nsga2', 'nsga3', 'moead', 'moqnas'],
-                        help='Which multi-objective evolutionary algorithm to run.')
+    # Algorithm selector: NSGA-III is the only algorithm in this repository.
+    parser.add_argument('--algo', type=str, default='nsga3', choices=['nsga3'],
+                        help='Kept so existing commands and matrices keep working.')
 
-    # NSGA-II/III and MOEA/D params (shared GA-style init)
+    # GA params
     parser.add_argument('--population_size', type=int, default=20)
     parser.add_argument('--num_generations', type=int, default=None,
-                        help='Number of generations. Defaults: 50 for nsga2/nsga3/moead; '
-                             'config max_generations for moqnas (CLI value overrides it).')
+                        help='Number of generations (default: 50).')
     parser.add_argument('--max_num_nodes', type=int, default=None,
                         help='Chromosome length. Defaults to QNAS.max_num_nodes '
                              'from the config file.')
@@ -289,33 +212,12 @@ if __name__ == '__main__':
     parser.add_argument('--ref_divisions', type=int, default=None,
                         help='NSGA-III lattice divisions p (auto if None).')
     
-    # MOEA/D specific
-    parser.add_argument('--moead_T', type=int, default=20,
-                        help='Neighborhood size T for MOEA/D.')
-    parser.add_argument('--moead_scalar', type=str, default='tchebycheff',
-                        choices=['tchebycheff', 'weighted_sum'],
-                        help='Scalarization method for MOEA/D.')
-    parser.add_argument('--moead_pneighbor', type=float, default=0.9,
-                        help='Probability of mating within neighborhood in MOEA/D.')
-
-    # QNAS/MO-QNAS extras (kept for compatibility)
-    parser.add_argument('--elite_mode', type=str, default='global_k',
-                        choices=['single', 'global_k', 'bootstrap_k', 'old', 'moead_topk'])
-    parser.add_argument('--ref_dir_method', type=str, default='das-dennis',
-                        choices=['das-dennis', 'dirichlet'])
-    parser.add_argument('--no-truncate-after-noop', action='store_true', dest='truncate_after_noop',
-                        help='Disable truncating architectures after the first no-op.')
-    parser.add_argument('--no-avoid-consecutive-pool', action='store_true', dest='avoid_consecutive_pool',
-                        help='Disable the rule preventing consecutive pooling layers.')
-    parser.add_argument('--no-enforce-noop-in-update', action='store_true', dest='enforce_noop_in_update',
-                        help='Disable enforcing no-op rules during the quantum update.')
-    
     parser.add_argument('--multi_objective', action='store_true', default=False,
-                        help='Enable multi-objective optimization (MO-QNAS).')
+                        help='Enable multi-objective optimization.')
 
     # Cache
     parser.add_argument('--resume', action='store_true', default=False,
-                        help='Resume a moqnas run from <experiment_path>/checkpoint.pkl. '
+                        help='Resume a run from <experiment_path>/checkpoint.pkl. '
                              'Without this flag an existing checkpoint is ignored.')
     parser.add_argument('--use_cache', action='store_true', default=False,
                         help='Use cached evaluations to speed up runs.')

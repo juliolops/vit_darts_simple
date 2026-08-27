@@ -1,9 +1,9 @@
-# Multi-objective search over ViT attention-head pruning (CIFAR-10).
+# Multi-objective search (NSGA-III) over ViT pruning on CIFAR-10.
 #
 # Chromosome: one gene per transformer block (max_num_nodes = 12 for
 # vit_base_patch16_224). Each gene is the PERCENTAGE of attention heads that
 # block keeps; which heads survive is decided by the DARTS alphas computed
-# beforehand (run_darts_alphas.py) — a gene of 40% keeps the 40% of heads
+# beforehand (run_darts_alphas.py) -- a gene of 40% keeps the 40% of heads
 # with the largest alpha. Search space: 20% to 90% in steps of 10.
 #
 # Objectives: accuracy (up) vs FLOPs (down). Every candidate is fine-tuned
@@ -14,66 +14,21 @@
 #   python run_darts_alphas.py --output darts_alphas/vit_base_cifar10.json
 
 QNAS:
-    crossover_rate: 0.5
-    max_generations: 20
-    max_num_nodes: 12          # one gene per transformer block
-    num_quantum_ind: 5
-    penalize_number: 0
-    repetition: 4
-    replace_method: best
-    update_quantum_gen: 1
-    crossover_frequency: 1
-    pop_crossover_rate: 0.4
-    pop_crossover_method: ['hux', 'one_point', 'two_point']
-    mo_crossover_strategy: directional
-    patience: 60
-    elite_mode: global_k
-    k_elites: 5
-    pool_factor: 3
-    ema_beta: 0.7
-    rank_weighting: True
-    initial_prob_distribution: uniform
-
-    # --- Architecture rules: inert here, since every gene is a valid
-    # percentage and there is no terminal/pool operation to guard ---
-    terminal_op_name: "heads_20"
-    pool_op_name: "none"
-    min_active_len: 1
-    truncate_after_noop: false
-    avoid_consecutive_pool: false
-    enforce_noop_in_update: false
-    noop_max_prob: 0.9
-    noop_ramp_cap: false
-
-    quantum_update_config:
-      quantum_rate_schedule: 'cosine'
-      max_update_schedule: 'cosine'
-      static_quantum_rate: 0.1
-      static_max_update: 0.05
-      quantum_rate_schedule_params:
-          start: 0.25
-          end: 0.1
-      max_update_schedule_params:
-          start: 1.0
-          end: 0.8
-      intensity_min: 0.5
-      intensity_max: 1.0
-
+    max_num_nodes: 12
     params_ranges:
       decay: 0.9
       learning_rate: 0.001
       momentum: 0.0
       weight_decay: 1.0e-4
 
-    # Search space: percentage of attention heads kept per block, 20%..90%.
-    function_dict:  {'heads_20': {'params': {'percent': 20}, 'prob': 1.0/8.0},
-                     'heads_30': {'params': {'percent': 30}, 'prob': 1.0/8.0},
-                     'heads_40': {'params': {'percent': 40}, 'prob': 1.0/8.0},
-                     'heads_50': {'params': {'percent': 50}, 'prob': 1.0/8.0},
-                     'heads_60': {'params': {'percent': 60}, 'prob': 1.0/8.0},
-                     'heads_70': {'params': {'percent': 70}, 'prob': 1.0/8.0},
-                     'heads_80': {'params': {'percent': 80}, 'prob': 1.0/8.0},
-                     'heads_90': {'params': {'percent': 90}, 'prob': 1.0/8.0}}
+    function_dict:  {'heads_20': {'params': {'percent': 20}},
+                     'heads_30': {'params': {'percent': 30}},
+                     'heads_40': {'params': {'percent': 40}},
+                     'heads_50': {'params': {'percent': 50}},
+                     'heads_60': {'params': {'percent': 60}},
+                     'heads_70': {'params': {'percent': 70}},
+                     'heads_80': {'params': {'percent': 80}},
+                     'heads_90': {'params': {'percent': 90}}}
 
 train:
     # --- ViT ---

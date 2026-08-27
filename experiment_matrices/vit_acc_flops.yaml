@@ -1,5 +1,5 @@
-# The four multi-objective algorithms on (best_accuracy, total_flops),
-# 3 repeats each, over the ViT attention-head pruning space.
+# NSGA-III on (best_accuracy, total_flops) over the ViT attention-head
+# pruning space, 3 repeats.
 #
 # Prerequisite (once):
 #   python run_darts_alphas.py --output darts_alphas/vit_base_cifar10.json
@@ -18,14 +18,11 @@ defaults:
   config_path_dataset: dataset_configs/cifar10_vit.yaml
   log_level: INFO
   multi_objective: true
-  population_size: 12        # used by nsga2/nsga3/moead (ignored by moqnas)
+  population_size: 12
   num_generations: 20
+  limit_data_value: 1000     # explicit: the CLI default (10000) overrides the config
   use_cache: true
 
 experiments:
-  - {algo: moqnas, config: experiment_configs/vit/config_vit_heads.yaml, name: moqnas}
-  - {algo: nsga2,  config: experiment_configs/vit/config_vit_heads.yaml, name: nsga2}
-  - {algo: nsga3,  config: experiment_configs/vit/config_vit_heads.yaml, name: nsga3,
+  - {algo: nsga3, config: experiment_configs/vit/config_vit_heads.yaml, name: nsga3,
      overrides: {ref_divisions: 12}}
-  - {algo: moead,  config: experiment_configs/vit/config_vit_heads.yaml, name: moead,
-     overrides: {ref_divisions: 12, moead_T: 10, moead_scalar: tchebycheff, moead_pneighbor: 0.9}}

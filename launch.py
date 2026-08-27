@@ -25,7 +25,7 @@ Matrix format (see experiment_matrices/*.yaml):
     resume: false        # OR pass --resume on the launcher to resume the batch
     exp_root: experiment_cifar10_qfamily
     experiments:
-      - algo: moqnas
+      - algo: nsga3
         config: experiment_configs/vit/config_vit_heads.yaml
         name: exp10
         overrides: {optimizer: AdamW}     # per-cell args (override defaults)
