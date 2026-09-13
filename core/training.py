@@ -56,17 +56,25 @@ def _run_epoch(model, loader, device, criterion, optimizer=None) -> float:
 
 
 def evaluate_candidate(percentages, params: dict, device: str, train_loader, val_loader) -> dict:
-    """Prune, fine-tune the classifier head, and return the two objectives.
+    """Prune, fine-tune the MLPs and the classifier, and return the two objectives.
 
-    ``best_accuracy`` is the mean validation accuracy over the last
-    ``epochs_to_eval`` epochs.
+    ``percentages`` holds one head percentage per block, followed by one MLP
+    percentage per block when ``prune_mlp`` is on. ``best_accuracy`` is the
+    mean validation accuracy over the last ``epochs_to_eval`` epochs.
     """
-    model = build_pruned_vit(percentages, load_alphas(params['vit_alphas_path']), NUM_CLASSES,
+    n_blocks = params['num_blocks']
+    model = build_pruned_vit(percentages[:n_blocks], load_alphas(params['vit_alphas_path']),
+                             NUM_CLASSES,
+                             mlp_percentages=percentages[n_blocks:] if params['prune_mlp'] else None,
                              model_name=params['vit_model_name'],
                              pretrained=params['vit_pretrained']).to(device)
-    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
-                                  lr=float(params['learning_rate']),
-                                  weight_decay=float(params['weight_decay']))
+    # The new classifier needs a large learning rate; the pretrained MLPs a small one,
+    # or a few steps wipe out the pretrained features.
+    optimizer = torch.optim.AdamW(
+        [{'params': model.get_classifier().parameters(), 'lr': float(params['learning_rate'])},
+         {'params': [p for b in model.blocks for p in b.mlp.parameters()],
+          'lr': float(params['mlp_learning_rate'])}],
+        weight_decay=float(params['weight_decay']))
     criterion = nn.CrossEntropyLoss()
 
     max_epochs, epochs_to_eval = params['max_epochs'], params['epochs_to_eval']

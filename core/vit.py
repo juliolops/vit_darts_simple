@@ -1,13 +1,14 @@
-"""ViT attention-head pruning driven by DARTS importances.
+"""ViT pruning: attention heads driven by DARTS importances, optionally MLP neurons.
 
 ``run_darts_alphas.py`` learns one alpha per attention head and saves them;
 the genetic search then evolves one gene per transformer block holding the
 *percentage* of heads that block keeps, and a gene of 40% keeps the 40% of
 heads with the largest alpha. So DARTS decides *which* heads matter and the
-GA decides *how much* to prune.
+GA decides *how much* to prune. With MLP pruning enabled, a second gene per
+block sets the percentage of MLP hidden neurons kept, ranked by weight magnitude.
 
-Pruning is surgical rather than masking: ``qkv``/``proj`` are rebuilt with
-only the surviving heads, so a pruned model really is cheaper.
+Pruning is surgical rather than masking: ``qkv``/``proj`` (and ``fc1``/``fc2``)
+are rebuilt with only the survivors, so a pruned model really is cheaper.
 """
 import json
 import os
@@ -86,33 +87,71 @@ def prune_attention_heads(attn: nn.Module, kept_heads: Sequence[int]) -> None:
     attn.num_heads, attn.attn_dim = n_keep, new_dim
 
 
-def build_pruned_vit(percentages: List[int], alphas: List[List[float]], num_classes: int,
+def prune_mlp_neurons(mlp: nn.Module, percentage: float) -> None:
+    """Shrink a timm ``Mlp`` in place to ``percentage`` of its hidden neurons.
+
+    There are no DARTS alphas for MLP neurons, so importance is the L2 norm of
+    each neuron's outgoing weights in ``fc2`` -- the standard magnitude
+    criterion for structured pruning. ``fc1`` keeps the surviving rows, ``fc2``
+    the matching columns; both ends stay 768 wide, so the block output is
+    unchanged in shape.
+    """
+    hidden = mlp.fc1.out_features
+    n_keep = max(1, min(hidden, round(hidden * float(percentage) / 100.0)))
+    if n_keep == hidden:
+        return
+
+    keep = torch.topk(mlp.fc2.weight.norm(dim=0), k=n_keep).indices.sort().values
+    kw = {'device': mlp.fc1.weight.device, 'dtype': mlp.fc1.weight.dtype}
+    new_fc1 = nn.Linear(mlp.fc1.in_features, n_keep, bias=mlp.fc1.bias is not None, **kw)
+    new_fc2 = nn.Linear(n_keep, mlp.fc2.out_features, bias=mlp.fc2.bias is not None, **kw)
+    with torch.no_grad():
+        new_fc1.weight.copy_(mlp.fc1.weight[keep])
+        new_fc2.weight.copy_(mlp.fc2.weight[:, keep])
+        if mlp.fc1.bias is not None:
+            new_fc1.bias.copy_(mlp.fc1.bias[keep])
+        if mlp.fc2.bias is not None:
+            new_fc2.bias.copy_(mlp.fc2.bias)
+
+    mlp.fc1, mlp.fc2 = new_fc1, new_fc2
+
+
+def build_pruned_vit(head_percentages: List[int], alphas: List[List[float]], num_classes: int,
+                     mlp_percentages: List[int] = None,
                      model_name: str = 'vit_base_patch16_224',
                      pretrained: bool = True) -> nn.Module:
-    """Build a ViT with block ``i`` keeping ``percentages[i]`` % of its heads.
+    """Build a ViT with block ``i`` keeping ``head_percentages[i]`` % of its heads and,
+    if ``mlp_percentages`` is given, ``mlp_percentages[i]`` % of its MLP neurons.
 
-    Everything but the classifier is frozen, so a candidate's accuracy
-    reflects the pruned representation rather than a full retraining of the
-    backbone.
+    Only the MLPs and the classifier are trainable. The attention layers, patch
+    embedding, positional embedding and LayerNorms keep their pretrained weights
+    frozen, as in the DARTS phase.
     """
     import timm
 
     model = timm.create_model(model_name, pretrained=pretrained, num_classes=num_classes)
     n_blocks = len(model.blocks)
-    if len(percentages) != n_blocks:
-        raise ValueError(
-            f"Chromosome has {len(percentages)} genes but {model_name} has {n_blocks} "
-            f"blocks. Set max_num_nodes to {n_blocks}.")
+    for name, genes in (('head', head_percentages), ('MLP', mlp_percentages)):
+        if genes is not None and len(genes) != n_blocks:
+            raise ValueError(
+                f"Got {len(genes)} {name} genes but {model_name} has {n_blocks} "
+                f"blocks. Set num_blocks to {n_blocks}.")
     if len(alphas) != n_blocks:
         raise ValueError(
             f"Got alphas for {len(alphas)} blocks but {model_name} has {n_blocks}. "
             f"Regenerate them with run_darts_alphas.py --model_name {model_name}.")
 
-    for block, block_alphas, percent in zip(model.blocks, alphas, percentages):
+    for block, block_alphas, percent in zip(model.blocks, alphas, head_percentages):
         prune_attention_heads(block.attn, select_heads_by_alpha(block_alphas, percent))
+    if mlp_percentages is not None:
+        for block, percent in zip(model.blocks, mlp_percentages):
+            prune_mlp_neurons(block.mlp, percent)
 
     for param in model.parameters():
         param.requires_grad = False
+    for block in model.blocks:
+        for param in block.mlp.parameters():
+            param.requires_grad = True
     for param in model.get_classifier().parameters():
         param.requires_grad = True
     return model

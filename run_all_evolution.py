@@ -1,13 +1,13 @@
 """Phase 2: multi-objective search (accuracy vs FLOPs) over per-block head pruning.
 
     python run_all_evolution.py --config_file config.yaml \
-        --experiment_path experiment_vit/teste1 \
+        --experiment_path experiment_vit/teste1 --algorithm nsga2 \
         --population_size 4 --num_generations 3 --limit_data_value 500 --threads 1
 """
 import argparse
 import os
 
-from algorithms.nsga import NSGA
+from algorithms.nsga import run_search
 from core.config import load_config
 from core.evaluation import EvalPopulation
 from core.utils import init_log, set_global_seeds
@@ -22,24 +22,25 @@ def main(args: dict):
     params = load_config(args)
     logger.info(f"Config: {params}")
 
-    engine = NSGA(
+    archive = run_search(
+        args['algorithm'],
         EvalPopulation(params, log_level=args['log_level']),
         args['experiment_path'],
         percentages=params['percentages'],
         population_size=args['population_size'],
         num_generations=args['num_generations'],
-        max_num_nodes=params['max_num_nodes'],
+        num_genes=params['num_genes'],
         crossover_rate=args['crossover_rate'],
         mutation_rate=args['mutation_rate'],
+        seed=args['seed'],
         log_file=os.path.join(args['experiment_path'], 'log.txt'),
         log_level=args['log_level'],
     )
-    population, fitnesses = engine.evolve()
     logger.info("Evolution finished.")
 
-    for i, (ind, fit) in enumerate(zip(population, fitnesses)):
-        fit_str = ", ".join(f"{name}={float(v):.4f}" for name, v in zip(engine.objectives, fit))
-        print(f"  Ind {i}: chrom={ind.tolist()}  ->  ({fit_str})")
+    for cid, chrom, objectives in archive:
+        obj_str = ", ".join(f"{name}={float(v):.4f}" for name, v in objectives.items())
+        print(f"  {cid}: chrom={chrom}  ->  ({obj_str})")
 
 
 if __name__ == '__main__':
@@ -48,10 +49,13 @@ if __name__ == '__main__':
     parser.add_argument('--config_file', type=str, required=True)
     parser.add_argument('--experiment_path', type=str, required=True,
                         help='Directory for the log and pareto_history.pkl.')
+    parser.add_argument('--algorithm', choices=['nsga2', 'nsga3'], default='nsga2')
     parser.add_argument('--population_size', type=int, default=20)
     parser.add_argument('--num_generations', type=int, default=50)
-    parser.add_argument('--crossover_rate', type=float, default=0.9)
-    parser.add_argument('--mutation_rate', type=float, default=0.05)
+    parser.add_argument('--crossover_rate', type=float, default=0.9,
+                        help='Probability that a pair of parents is recombined (SBX).')
+    parser.add_argument('--mutation_rate', type=float, default=None,
+                        help='Per-gene mutation probability (default: 1 / number of genes).')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--log_level', choices=['NONE', 'INFO', 'DEBUG'], default='INFO')
     # Optional overrides of the config file.

@@ -1,26 +1,30 @@
-# Multi-objective search (accuracy up, FLOPs down) over ViT attention-head
-# pruning on CIFAR-10.
+# Multi-objective search (accuracy up, FLOPs down) over ViT pruning on CIFAR-10.
 #
-# Chromosome: one gene per transformer block (12 for vit_base_patch16_224).
-# Each gene picks the percentage of attention heads that block keeps; which
-# heads survive is decided by the DARTS alphas (run_darts_alphas.py).
+# Chromosome: one gene per transformer block (12 for vit_base_patch16_224)
+# picking the percentage of attention heads that block keeps; which heads
+# survive is decided by the DARTS alphas (run_darts_alphas.py). With
+# prune_mlp: true, 12 more genes pick the percentage of MLP hidden neurons
+# each block keeps (ranked by weight magnitude): 24 genes in total.
 #
-# Every candidate is fine-tuned with ONLY the classifier head trainable.
+# Every candidate fine-tunes its MLPs and the classifier; the attention layers
+# keep their pretrained weights frozen.
 
-max_num_nodes: 12
-percentages: [20, 30, 40, 50, 60, 70, 80, 90]
+num_blocks: 12
+prune_mlp: false         # true: also prune the MLP of every block (24 genes)
+percentages: [20, 30, 40, 50, 60, 70, 80, 90]   # used by head and MLP genes
 
 # --- ViT ---
 vit_model_name: vit_base_patch16_224
 vit_pretrained: true
 vit_alphas_path: darts_alphas/vit_base_cifar10.json
 
-# --- Candidate training (classifier head only, AdamW) ---
+# --- Candidate training (MLPs + classifier, AdamW) ---
 batch_size: 32
 eval_batch_size: 32
 max_epochs: 3
 epochs_to_eval: 2        # accuracy = mean val accuracy over the last 2 epochs
-learning_rate: 0.001
+learning_rate: 0.001        # classifier (new layer)
+mlp_learning_rate: 1.0e-4   # pretrained MLPs; 1e-3 destroys the pretrained features
 weight_decay: 1.0e-4
 
 # --- CIFAR-10 (224x224 + ImageNet normalization) ---

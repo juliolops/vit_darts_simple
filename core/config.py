@@ -2,10 +2,10 @@
 import yaml
 
 REQUIRED = {
-    'max_num_nodes': int, 'percentages': list,
+    'num_blocks': int, 'prune_mlp': bool, 'percentages': list,
     'vit_model_name': str, 'vit_pretrained': bool, 'vit_alphas_path': str,
     'batch_size': int, 'eval_batch_size': int, 'max_epochs': int, 'epochs_to_eval': int,
-    'learning_rate': float, 'weight_decay': float,
+    'learning_rate': float, 'mlp_learning_rate': float, 'weight_decay': float,
     'data_path': str, 'train_split': float, 'split_seed': int, 'loader_seed': int,
     'limit_data_value': int, 'num_workers': int, 'threads': int,
 }
@@ -33,6 +33,9 @@ def load_config(args: dict) -> dict:
 
     if params['epochs_to_eval'] >= params['max_epochs']:
         raise ValueError('epochs_to_eval must be < max_epochs.')
+
+    # One head gene per block, plus one MLP gene per block when pruning the MLP.
+    params['num_genes'] = params['num_blocks'] * (2 if params['prune_mlp'] else 1)
 
     for key in OVERRIDES:
         if args.get(key) is not None:
