@@ -3,6 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import timm
 
+
+def normalized_weights(alphas):
+    """N * softmax(alphas): mean 1, so all-equal alphas leave the layer unchanged."""
+    return alphas.numel() * F.softmax(alphas, dim=0)
+
+
 class DartsAttentionWrapper(nn.Module):
     def __init__(self, original_attn):
         super().__init__()
@@ -37,7 +43,7 @@ class DartsAttentionWrapper(nn.Module):
         x_heads = attn @ v 
 
         # DARTS: Ponderação das cabeças
-        alpha_weights = F.softmax(self.alphas, dim=0).view(1, -1, 1, 1)
+        alpha_weights = normalized_weights(self.alphas).view(1, -1, 1, 1)
         x_heads = x_heads * alpha_weights
 
         x = x_heads.transpose(1, 2).reshape(B, N, C)
@@ -45,25 +51,56 @@ class DartsAttentionWrapper(nn.Module):
         x = self.proj_drop(x)
         return x
 
+
+class DartsMlpWrapper(nn.Module):
+    def __init__(self, original_mlp):
+        super().__init__()
+        self.fc1 = original_mlp.fc1
+        self.act = original_mlp.act
+        self.drop1 = original_mlp.drop1
+        self.norm = original_mlp.norm
+        self.fc2 = original_mlp.fc2
+        self.drop2 = original_mlp.drop2
+
+        # Parâmetros da arquitetura (Alphas) para ponderar os neurônios da camada escondida
+        self.alphas = nn.Parameter(torch.ones(self.fc1.out_features))
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop1(x)
+        x = self.norm(x)
+
+        # DARTS: Ponderação dos neurônios escondidos
+        x = x * normalized_weights(self.alphas)
+
+        x = self.fc2(x)
+        x = self.drop2(x)
+        return x
+
+
 def build_darts_vit(model_name='vit_base_patch16_224', num_classes=1000):
+    """Pretrained ViT with DARTS alphas on every attention head and MLP hidden neuron.
+
+    Only the MLP weights and the classifier head are trained (``weight_params``);
+    the attention layers, embeddings and LayerNorms keep their pretrained weights.
+    """
     model = timm.create_model(model_name, pretrained=True, num_classes=num_classes)
-    
+    for param in model.parameters():
+        param.requires_grad = False
+
     alpha_params = []
     weight_params = []
 
     for block in model.blocks:
         block.attn = DartsAttentionWrapper(block.attn)
-        
-        for param in block.attn.qkv.parameters():
-            param.requires_grad = False
-        for param in block.attn.proj.parameters():
-            param.requires_grad = False
-            
-        alpha_params.append(block.attn.alphas)
-        
-        for param in block.mlp.parameters():
-            param.requires_grad = True
-            weight_params.append(param)
+        block.mlp = DartsMlpWrapper(block.mlp)
+        alpha_params += [block.attn.alphas, block.mlp.alphas]
+
+        for layer in (block.mlp.fc1, block.mlp.fc2):
+            for param in layer.parameters():
+                param.requires_grad = True
+                weight_params.append(param)
             
     for param in model.head.parameters():
         param.requires_grad = True

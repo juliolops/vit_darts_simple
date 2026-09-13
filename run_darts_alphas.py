@@ -1,9 +1,11 @@
-"""Phase 1: learn the attention-head importances (alphas) with DARTS.
+"""Phase 1: learn the importances (alphas) of attention heads and MLP neurons with DARTS.
 
 Uses ``build_darts_vit`` and ``train_darts_epoch`` from
-``vit_transformer_search.py`` and writes the resulting per-head alphas to
-JSON. The genetic search (``run_all_evolution.py``) then reads that file to
-decide which heads a given pruning percentage keeps.
+``vit_transformer_search.py``: on each step the alphas are updated on a
+validation batch and the MLP + classifier weights on a training batch, while
+the attention layers stay pretrained. The resulting per-head and per-neuron
+weights are written to JSON; the genetic search (``run_all_evolution.py``)
+then reads that file to decide which heads and neurons a pruning percentage keeps.
 
     python run_darts_alphas.py --epochs 1 --limit_train 2000 \
         --output darts_alphas/vit_base_cifar10.json
@@ -76,9 +78,10 @@ def main(args):
     alphas = extract_alphas(model)
     save_alphas(args.output, alphas)
     print(f"\n[darts] alphas salvos em {args.output}")
-    for i, block_alphas in enumerate(alphas):
-        ranked = sorted(range(len(block_alphas)), key=lambda h: block_alphas[h], reverse=True)
-        print(f"  bloco {i:02d}: cabeças por importância {ranked}")
+    for i, (head_w, mlp_w) in enumerate(zip(alphas['heads'], alphas['mlp'])):
+        ranked = sorted(range(len(head_w)), key=lambda h: head_w[h], reverse=True)
+        print(f"  bloco {i:02d}: cabeças por importância {ranked} | "
+              f"pesos MLP min={min(mlp_w):.4f} max={max(mlp_w):.4f}")
 
 
 if __name__ == '__main__':

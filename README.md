@@ -2,8 +2,8 @@
 
 Searches for **pruned Vision Transformers** on **CIFAR-10**, trading **accuracy** (maximize) against **FLOPs** (minimize), in two phases:
 
-1. **DARTS** learns one importance weight (*alpha*) per attention head of a pretrained `vit_base_patch16_224`.
-2. **A multi-objective genetic algorithm** ([pymoo](https://pymoo.org) NSGA-II or NSGA-III) evolves one gene per transformer block: the **percentage of heads that block keeps**, from 20% to 90%. A gene of 40% keeps the 40% of that block's heads with the largest alpha. With `prune_mlp: true` in `config.yaml`, a second gene per block sets the **percentage of MLP hidden neurons** kept, ranked by the L2 norm of their `fc2` weights (24 genes in total).
+1. **DARTS** learns one importance weight (*alpha*) per **attention head** and per **MLP hidden neuron** of a pretrained `vit_base_patch16_224`. Each head output and each hidden activation is multiplied by `N · softmax(alphas)` over its block (N = 12 heads or 3072 neurons), so the weights average 1 and training starts from the exact pretrained model. On every step the alphas are updated on a validation batch and the **MLP + classifier weights** on a training batch; the attention layers keep their pretrained weights.
+2. **A multi-objective genetic algorithm** ([pymoo](https://pymoo.org) NSGA-II or NSGA-III) evolves one gene per transformer block: the **percentage of heads that block keeps**, from 20% to 90%. A gene of 40% keeps the 40% of that block's heads with the largest alpha. With `prune_mlp: true` in `config.yaml`, a second gene per block sets the **percentage of MLP hidden neurons** kept, also chosen by their alphas (24 genes in total). The objectives are accuracy (maximize) and FLOPs (minimize).
 
 | Chromosome | Genes | Pruned | Min. FLOPs (all genes at 20%) |
 |---|---|---|---|
@@ -12,13 +12,13 @@ Searches for **pruned Vision Transformers** on **CIFAR-10**, trading **accuracy*
 
 The unpruned ViT-Base has 85.8M parameters and ~33.7G FLOPs; the MLP accounts for about two thirds of each block's compute.
 
-Pruning is surgical: each block's `qkv`/`proj` (and `fc1`/`fc2`) layers are rebuilt with only the survivors, so a pruned candidate really is smaller. Each candidate then fine-tunes **its MLPs and the classifier head** for a few epochs on a class-balanced CIFAR-10 subset, while the **attention layers keep their pretrained weights frozen** (the same split used by the DARTS phase), and is scored on accuracy and FLOPs. The classifier and the MLPs have separate learning rates (`learning_rate`, `mlp_learning_rate` in `config.yaml`): with 90% of heads and neurons kept, 3 epochs on 450 images reach 87% validation accuracy with an MLP learning rate of 1e-4, against 20% with 1e-3 and 73% when training the classifier alone.
+Pruning is surgical: each block's `qkv`/`proj` (and `fc1`/`fc2`) layers are rebuilt with only the survivors, so a pruned candidate really is smaller. Each candidate then fine-tunes **its MLPs and the classifier head** for a few epochs on a class-balanced CIFAR-10 subset, while the **attention layers keep their pretrained weights frozen** (the same split used by the DARTS phase), and is scored on accuracy and FLOPs. The classifier and the pretrained MLPs have separate learning rates (`learning_rate`, `mlp_learning_rate` in `config.yaml`); a large MLP learning rate (1e-3) wipes out the pretrained features within a few steps.
 
 ## Project structure
 
 ```
-├── run_darts_alphas.py        # Phase 1: learn the head alphas -> darts_alphas/*.json
-├── vit_transformer_search.py  # DARTS attention wrapper + training epoch
+├── run_darts_alphas.py        # Phase 1: learn head + MLP-neuron alphas -> darts_alphas/*.json
+├── vit_transformer_search.py  # DARTS attention/MLP wrappers + training epoch
 ├── run_all_evolution.py       # Phase 2: multi-objective search
 ├── config.yaml                # Search space, ViT and training settings
 ├── algorithms/

@@ -1,10 +1,10 @@
 # Multi-objective search (accuracy up, FLOPs down) over ViT pruning on CIFAR-10.
 #
 # Chromosome: one gene per transformer block (12 for vit_base_patch16_224)
-# picking the percentage of attention heads that block keeps; which heads
-# survive is decided by the DARTS alphas (run_darts_alphas.py). With
+# picking the percentage of attention heads that block keeps. With
 # prune_mlp: true, 12 more genes pick the percentage of MLP hidden neurons
-# each block keeps (ranked by weight magnitude): 24 genes in total.
+# each block keeps: 24 genes in total. Which heads and neurons survive is
+# decided by the DARTS alphas (run_darts_alphas.py).
 #
 # Every candidate fine-tunes its MLPs and the classifier; the attention layers
 # keep their pretrained weights frozen.
