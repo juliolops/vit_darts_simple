@@ -1,16 +1,14 @@
 """Phase 1: learn the attention-head importances (alphas) with DARTS.
 
-Reuses ``vit_transformer_search.py`` unchanged (``build_darts_vit`` and
-``train_darts_epoch``) and writes the resulting per-head alphas to JSON.
-The genetic search (``run_all_evolution.py --algo nsga3`` with a ViT
-config) then reads that file to decide which heads a given pruning
-percentage keeps.
+Uses ``build_darts_vit`` and ``train_darts_epoch`` from
+``vit_transformer_search.py`` and writes the resulting per-head alphas to
+JSON. The genetic search (``run_all_evolution.py``) then reads that file to
+decide which heads a given pruning percentage keeps.
 
     python run_darts_alphas.py --epochs 1 --limit_train 2000 \
         --output darts_alphas/vit_base_cifar10.json
 """
 import argparse
-import os
 
 import torch
 import torch.nn as nn

@@ -1,151 +1,72 @@
 # ViT-NAS: Multi-Objective Attention-Head Pruning on CIFAR-10
 
-This repository searches for **pruned Vision Transformers** on **CIFAR-10**, trading **accuracy** against **hardware cost** (FLOPs, parameter count, inference time). It runs in two phases: DARTS learns which attention heads matter, then a multi-objective genetic algorithm decides how aggressively to prune each block.
+Searches for **pruned Vision Transformers** on **CIFAR-10**, trading **accuracy** (maximize) against **FLOPs** (minimize), in two phases:
 
-The search algorithm is **NSGA-III**: Pareto dominance with reference-direction niching.
+1. **DARTS** learns one importance weight (*alpha*) per attention head of a pretrained `vit_base_patch16_224`.
+2. **A multi-objective genetic algorithm** evolves one gene per transformer block (12 genes): the **percentage of heads that block keeps**, from 20% to 90%. A gene of 40% keeps the 40% of that block's heads with the largest alpha.
 
-## How it works
+Pruning is surgical: each block's `qkv`/`proj` layers are rebuilt with only the surviving heads, so a pruned candidate really is smaller. Each candidate is then fine-tuned with **only the classifier head trainable** for a few epochs on a class-balanced CIFAR-10 subset, and scored on accuracy and FLOPs.
 
-**DARTS decides *which* heads matter; the GA decides *how much* to prune.**
-
-- **Phase 1 (DARTS)** learns one importance weight (*alpha*) per attention head of a pretrained `vit_base_patch16_224`.
-- **Phase 2 (GA)** evolves a chromosome with **one gene per transformer block** (12 for ViT-Base). Each gene is the **percentage of heads that block keeps** — 20% to 90%, in steps of 10. A gene of 40% keeps the 40% of that block's heads with the largest alpha.
-
-Pruning is **surgical, not masking**: the block's `qkv`/`proj` layers are rebuilt holding only the surviving heads, so a pruned candidate really is smaller and cheaper (85.8M → 62.2M parameters at 20% heads). Each candidate is then fine-tuned with **only the classifier head trainable**, so its accuracy reflects the pruned representation rather than a full retraining of the backbone.
-
-## Features
-
-- **NSGA-III** — Pareto dominance with reference-direction niching, which keeps the front evenly covered and scales to three or more objectives. It inherits its evaluation, Pareto archive and checkpointing from the `NSGA2` base class in `algorithms/ga/nsga2.py`.
-- **Configurable objectives:** any combination of accuracy, FLOPs, parameter count and measured inference time, declared per experiment and validated at startup.
-- **Experiment-Matrix Launcher:** `launch.py` expands a YAML matrix into one run per (experiment × repeat), schedules them across GPU slots, and assigns an explicit seed to every repeat for reproducibility.
-- **Selectable Training Precision:** `fp32`, `fp16`, or `bf16` from the config.
-- **Runs on CUDA, Apple Silicon (MPS), or CPU** — the evaluation engine picks the best available device automatically (CUDA → MPS → CPU); MPS is a single shared GPU, so use a small `--threads`/`workers_per_gpu` there.
-- **Evaluation Cache:** an optional cache reuses the metrics of candidates already evaluated.
-- **Checkpointing & Resume:** the search saves its full state (population, Pareto archive, reference directions, and all RNG) at every generation, and can resume an interrupted run bit-identically.
-
-## Project Structure
+## Project structure
 
 ```
+├── run_darts_alphas.py        # Phase 1: learn the head alphas -> darts_alphas/*.json
+├── vit_transformer_search.py  # DARTS attention wrapper + training epoch
+├── run_all_evolution.py       # Phase 2: multi-objective search
+├── config.yaml                # Search space, ViT and training settings
 ├── algorithms/
-│   ├── ga/                        # NSGA-III (nsga3.py) over its NSGA2/GA base classes
-│   └── pareto/                    # Pareto operators (dominance, diversity, hypervolume)
-│
-├── core/
-│   ├── vit.py                     # ViT head pruning + DARTS alphas (the search space)
-│   ├── training/                  # Trainer, data loader and metrics
-│   │   └── metrics/               # Accuracy + HardwareMetrics (FLOPs, params, time, memory)
-│   ├── config.py                  # Experiment configuration handler
-│   ├── evaluation.py              # Population evaluation engine (work-stealing scheduler)
-│   ├── eval_cache.py              # Optional unified evaluation cache
-│   └── precision.py               # fp32 / fp16 / bf16 precision policy
-│
-├── dataset_utils/                 # CIFAR-10 loading, splitting and transforms
-├── dataset_configs/
-│   ├── cifar10_vit.yaml           # Dataset metadata (224x224 + ImageNet normalization)
-│   └── cfg_obj.json               # Objective senses (maximize / minimize)
-│
-├── experiment_configs/vit/        # Search space, algorithm and training settings
-├── experiment_matrices/           # YAML matrices consumed by launch.py
-│
-├── run_darts_alphas.py            # Phase 1: learn the attention-head alphas
-├── run_all_evolution.py           # Phase 2: one evolution run (any algorithm)
-├── launch.py                      # Experiment-matrix launcher (multiple runs)
-└── vit_transformer_search.py      # The standalone DARTS implementation (reused by phase 1)
+│   ├── nsga.py                # GA: rank tournament, crossover/mutation, NSGA-II selection, Pareto archive
+│   └── pareto.py              # Dominance, non-dominated sort, crowding, hypervolume
+└── core/
+    ├── vit.py                 # Alphas I/O + attention-head pruning
+    ├── data.py                # CIFAR-10 split, balanced subset, loaders
+    ├── training.py            # Fine-tune the classifier, accuracy + FLOPs
+    ├── evaluation.py          # Parallel evaluation of a population
+    ├── config.py              # Config loading and validation
+    └── utils.py               # Seeding, logging, device selection
 ```
 
-## Getting Started
+## Running a quick test
 
-### 1. Installation
+### 1. Environment
 
 ```bash
-git clone https://github.com/juliolops/vit_darts_simple.git
-cd vit_darts_simple
+conda create -n vitnas python=3.10 -y
+conda activate vitnas
+pip install torch torchvision
 pip install -r requirements.txt
 ```
 
-### 2. Phase 1 — learn the alphas (DARTS)
+CIFAR-10 (~170 MB) and the pretrained ViT weights (~350 MB) are downloaded on first use.
+
+### 2. Phase 1 — alphas (DARTS)
 
 ```bash
-python run_darts_alphas.py --epochs 1 --limit_train 2000 \
+python run_darts_alphas.py --epochs 1 --limit_train 500 \
     --output darts_alphas/vit_base_cifar10.json
 ```
 
-Reuses [`vit_transformer_search.py`](vit_transformer_search.py) (unchanged) and writes one alpha per head, per block, to JSON. **Run this once** — every search below reuses the file.
+This short run only checks the pipeline; use more images/epochs (`--limit_train 0` = full train set) for a meaningful head ranking.
 
-`vit_transformer_search.py` also still runs standalone (`python vit_transformer_search.py`) as the original self-contained DARTS demo.
-
-### 3. Phase 2 — multi-objective search over the pruning percentages
+### 3. Phase 2 — search
 
 ```bash
-python run_all_evolution.py \
-    --algo nsga3 \
-    --config_file experiment_configs/vit/config_vit_heads.yaml \
-    --experiment_path experiment_vit/nsga3/run1 \
-    --data_path data --dataset cifar10 \
-    --config_path_dataset dataset_configs/cifar10_vit.yaml \
-    --population_size 12 --num_generations 20 \
-    --multi_objective --seed 42 --log_level INFO
+python run_all_evolution.py --config_file config.yaml \
+    --experiment_path experiment_vit/teste1 \
+    --population_size 4 --num_generations 3 \
+    --limit_data_value 500 --threads 1 --seed 42
 ```
 
-Key flags:
+Flags: `--population_size`, `--num_generations`, `--crossover_rate` (0.9), `--mutation_rate` (0.05), `--seed` (42), `--log_level`. `--data_path`, `--limit_data_value` and `--threads` override `config.yaml` when given. The evaluation picks CUDA, then Apple MPS, then CPU; keep `--threads 1` on MPS.
 
-- `--algo`: Only `nsga3` is available; the flag is kept so existing commands keep working.
-- `--config_file`: Experiment config (`experiment_configs/vit/...`).
-- `--config_path_dataset`: Dataset metadata YAML (`dataset_configs/cifar10_vit.yaml`).
-- `--experiment_path`: Directory where logs and results are saved.
-- `--seed`: Global RNG seed (makes a run reproducible).
-- `--use_cache`: Skip re-evaluating candidates already seen.
-- `--resume`: Continue from `<experiment_path>/checkpoint.pkl`.
+### 4. Results
 
-> Note on resume: `--resume` works for every algorithm. Without it, an existing
-> checkpoint is ignored and the run restarts from generation 0 (safe default).
-> Rerun the exact same command plus `--resume`; a mismatch aborts naming the
-> differing field.
-
-> Note on hardware: the evaluation engine picks CUDA if available, otherwise
-> Apple Silicon MPS, otherwise CPU — no flag needed. Multi-GPU (CUDA) is
-> controlled with `CUDA_VISIBLE_DEVICES`. On MPS, prefer a small
-> `--threads`/`workers_per_gpu` (1-2) since it's one shared GPU.
-
-### 4. A batch of runs (`launch.py`)
+The final Pareto front is printed at the end. Per generation, `<experiment_path>/pareto_history.pkl` holds the Pareto archive and its hypervolume, and `log.txt` the search log:
 
 ```bash
-# Preview the exact commands without running anything
-python launch.py experiment_matrices/vit_acc_flops.yaml --dry-run
-
-# Launch the four multi-objective algorithms, 3 repeats each
-python launch.py experiment_matrices/vit_acc_flops.yaml
-
-# Resume an interrupted batch
-python launch.py experiment_matrices/vit_acc_flops.yaml --resume
-```
-
-## Configuration
-
-Each experiment is a YAML in `experiment_configs/vit/`. The `QNAS:` block holds the search space and algorithm hyperparameters; the `train:` block holds everything about training and objectives:
-
-- `max_num_nodes` — chromosome length; **must equal the ViT's block count** (12 for `vit_base_patch16_224`).
-- `function_dict` — the search space: one entry per pruning percentage.
-- `vit_model_name` / `vit_alphas_path` — which ViT to prune and where its alphas live.
-- `objectives` — e.g. `[best_accuracy, total_flops]`; validated at startup against `dataset_configs/cfg_obj.json` and the configured `metrics:` plugins (`Accuracy`, `HardwareMetrics`).
-- `precision` — `fp32 | fp16 | bf16` (`bf16`/`fp16` need CUDA or MPS).
-
-## Environment
-
-Tested on Ubuntu 22.04 with an NVIDIA L40S, and on macOS with Apple Silicon.
-
-```bash
-conda create -n vitnas python=3.10
-conda activate vitnas
-
-# Linux + NVIDIA GPU:
-conda install pytorch torchvision pytorch-cuda=12.4 -c pytorch -c nvidia
-# macOS (Apple Silicon, MPS):
-pip install torch torchvision
-
-pip install -r requirements.txt
+python -c "import pickle; h=pickle.load(open('experiment_vit/teste1/pareto_history.pkl','rb')); [print(g, 'HV=%.4f' % r['hypervolume'], r[1]) for g, r in h.items()]"
 ```
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+MIT. See the LICENSE file.

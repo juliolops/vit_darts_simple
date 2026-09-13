@@ -1,0 +1,34 @@
+# Multi-objective search (accuracy up, FLOPs down) over ViT attention-head
+# pruning on CIFAR-10.
+#
+# Chromosome: one gene per transformer block (12 for vit_base_patch16_224).
+# Each gene picks the percentage of attention heads that block keeps; which
+# heads survive is decided by the DARTS alphas (run_darts_alphas.py).
+#
+# Every candidate is fine-tuned with ONLY the classifier head trainable.
+
+max_num_nodes: 12
+percentages: [20, 30, 40, 50, 60, 70, 80, 90]
+
+# --- ViT ---
+vit_model_name: vit_base_patch16_224
+vit_pretrained: true
+vit_alphas_path: darts_alphas/vit_base_cifar10.json
+
+# --- Candidate training (classifier head only, AdamW) ---
+batch_size: 32
+eval_batch_size: 32
+max_epochs: 3
+epochs_to_eval: 2        # accuracy = mean val accuracy over the last 2 epochs
+learning_rate: 0.001
+weight_decay: 1.0e-4
+
+# --- CIFAR-10 (224x224 + ImageNet normalization) ---
+data_path: data
+train_split: 0.9
+split_seed: 2025
+loader_seed: 777
+limit_data_value: 1000   # images per candidate (train + val), class-balanced
+num_workers: 2
+
+threads: 1               # candidates evaluated concurrently (keep 1 on Apple MPS)

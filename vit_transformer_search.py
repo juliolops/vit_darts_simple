@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import timm
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, random_split
 
 class DartsAttentionWrapper(nn.Module):
     def __init__(self, original_attn):
@@ -147,72 +145,3 @@ def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_al
             print(f"Step {step:03d}/{total_steps} | "
                   f"Treino -> Loss: {loss_w.item():.4f} Acc@1: {trn_acc1:.2f}% Acc@5: {trn_acc5:.2f}% | "
                   f"Validação -> Loss: {loss_alpha.item():.4f} Acc@1: {val_acc1:.2f}% Acc@5: {val_acc5:.2f}%")
-
-def main():
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-        print("Aceleração Apple Metal (MPS) ativada com sucesso!")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-        print("Aceleração NVIDIA (CUDA) ativada!")
-    else:
-        device = torch.device("cpu")
-        print("Aviso: Rodando na CPU.")
-
-    print(f"Iniciando treinamento no dispositivo: {device}")
-
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)), 
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    full_train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    
-    train_size = len(full_train_dataset) // 2
-    val_size = len(full_train_dataset) - train_size
-    
-    train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
-
-    # Correção da compatibilidade do pin_memory
-    use_pin_memory = torch.cuda.is_available()
-
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=use_pin_memory)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=use_pin_memory)
-
-    model, weight_params, alpha_params = build_darts_vit(model_name='vit_base_patch16_224', num_classes=10)
-    model = model.to(device)
-
-    optimizer_w = torch.optim.AdamW(weight_params, lr=1e-3, weight_decay=1e-4)
-    optimizer_alpha = torch.optim.Adam(alpha_params, lr=3e-4, weight_decay=1e-3)
-    criterion = nn.CrossEntropyLoss()
-
-    num_epochs = 5
-    
-    for epoch in range(num_epochs):
-        print(f"\n--- Época {epoch+1}/{num_epochs} ---")
-        
-        train_darts_epoch(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            optimizer_w=optimizer_w,
-            optimizer_alpha=optimizer_alpha,
-            criterion=criterion,
-            device=device
-        )
-        
-        analisar_alphas(model)
-
-    torch.save(model.state_dict(), 'darts_vit_finetuned.pth')
-    print("Treinamento concluído e modelo salvo!")
-
-def analisar_alphas(model):
-    print("\n[Distribuição dos Alphas por Bloco]")
-    for i, block in enumerate(model.blocks):
-        probs = F.softmax(block.attn.alphas.detach(), dim=0)
-        probs_str = ", ".join([f"{p:.3f}" for p in probs.cpu().numpy()])
-        print(f"Bloco {i:02d}: [{probs_str}]")
-
-if __name__ == '__main__':
-    main()

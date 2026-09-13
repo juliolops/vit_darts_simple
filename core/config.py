@@ -1,375 +1,41 @@
-""" Copyright (c) 2020, Daniela Szwarcman and IBM Research
-    * Licensed under The MIT License [see LICENSE for details]
-
-    - Q-NAS configuration.
-"""
-
-import inspect
-import json
-import logging
-import os
-from collections import OrderedDict
-
-import numpy as np
+"""Load and validate the experiment YAML, applying command-line overrides."""
 import yaml
-import re
 
-from settings import CFG_OBJ_PATH
-from core.precision import resolve_precision
-from utils.helpers import load_yaml, load_pkl, natural_key
-
-# Output names each metric plugin contributes to the evaluation results.
-# The trainer itself always provides the *builtin* names regardless of plugins.
-# Used by _check_objectives to fail fast on objectives nothing will produce.
-METRIC_PROVIDES = {
-    'Accuracy': {'accuracy'},
-    'HardwareMetrics': {'cuda_inference_time', 'total_params', 'total_flops',
-                        'model_memory_usage'},
+REQUIRED = {
+    'max_num_nodes': int, 'percentages': list,
+    'vit_model_name': str, 'vit_pretrained': bool, 'vit_alphas_path': str,
+    'batch_size': int, 'eval_batch_size': int, 'max_epochs': int, 'epochs_to_eval': int,
+    'learning_rate': float, 'weight_decay': float,
+    'data_path': str, 'train_split': float, 'split_seed': int, 'loader_seed': int,
+    'limit_data_value': int, 'num_workers': int, 'threads': int,
 }
-TRAINER_BUILTIN_METRICS = {'best_accuracy', 'best_loss'}
+
+# CLI flags that, when given, replace the config value.
+OVERRIDES = ('data_path', 'limit_data_value', 'threads')
 
 
-class ConfigParameters(object):
-    """Handles the loading, validation, and organization of all configuration parameters."""
+def load_config(args: dict) -> dict:
+    with open(args['config_file'], encoding='utf-8') as f:
+        params = yaml.safe_load(f)
 
-    def __init__(self, args: dict, phase: str):
-        """Initializes the ConfigParameters object.
+    for key, expected in REQUIRED.items():
+        if key not in params:
+            raise KeyError(f"'{key}' not found in {args['config_file']}.")
+        if not isinstance(params[key], expected):
+            raise TypeError(f"'{key}' should be {expected.__name__} but is "
+                            f"{type(params[key]).__name__}.")
 
-        Args:
-            args (dict): A dictionary of command-line arguments.
-            phase (str): The current operational phase, which must be one of
-                        'evolution', 'continue_evolution', or 'retrain'.
-        """
-        self.phase = phase
-        self.args = args
-        self.QNAS_spec = {}
-        self.train_spec = {}
-        self.files_spec = {}
-        self.fn_dict = {}
-        self.previous_params_file = None
-        self.data_info = None
-        self.evolved_params = None
+    for percent in params['percentages']:
+        if not isinstance(percent, int) or not 0 < percent <= 100:
+            raise ValueError(f"percentages must be ints in (0, 100], got {percent!r}.")
+    # Ascending, so a +/-1 gene mutation is a one-step change in the percentage.
+    params['percentages'] = sorted(params['percentages'])
 
-    def _check_vars(self, config_file: dict):
-        """Validates the structure and types of parameters in the configuration file.
+    if params['epochs_to_eval'] >= params['max_epochs']:
+        raise ValueError('epochs_to_eval must be < max_epochs.')
 
-        This method ensures that all required keys are present in the config file
-        and that their corresponding values have the correct data types. It also
-        performs value-range checks for specific parameters like learning rates
-        and function probabilities.
-
-        Args:
-            config_file (dict): The loaded configuration from the YAML file.
-
-        Raises:
-            KeyError: If a required variable is missing.
-            TypeError: If a variable has an incorrect type.
-            ValueError: If a parameter's value is out of its allowed bounds.
-        """
-
-        def check_params_ranges():
-            """Checks if hyperparameter search ranges are within safe, predefined limits."""
-            ranges = config_file['QNAS']['params_ranges']
-            allowed = {'decay': (1e-6, 1.0), 'learning_rate': (1e-6, 1.0),
-                        'momentum': (0.0, 1.0), 'weight_decay': (1e-10, 1e-1)}
-
-            for key, value in ranges.items():
-                limit = allowed.get(key)
-                if not limit: continue
-                
-                low, high = (value[0], value[1]) if isinstance(value, list) else (value, value)
-                if not (limit[0] <= low and high <= limit[1]):
-                    raise ValueError(f'{key} value out of bound {limit}!')
-
-        def check_fn_dict():
-            """Validates the search space: every gene is a keep percentage."""
-            for name, definition in config_file['QNAS']['function_dict'].items():
-                percent = definition['params'].get('percent')
-                if not isinstance(percent, int) or not (0 < percent <= 100):
-                    raise ValueError(
-                        f"{name}: 'percent' must be an int in (0, 100], got {percent!r}.")
-
-        vars_dict = {
-            'QNAS': [('max_num_nodes', int), ('function_dict', dict),
-                    ('params_ranges', dict)],
-
-            'train': [('batch_size', int), ('eval_batch_size', int), ('max_epochs', int),
-                    ('epochs_to_eval', int), ('optimizer', str), ('device', str),
-                    ('dataset', str), ('vit_alphas_path', str),
-                    ('objectives', list), ('multi_objective', bool), ('metrics', list),
-                    ('data_augmentation', bool), ('subtract_mean', bool),
-                    ('limit_data', bool), ('limit_data_value', int), ('threads', int),
-                    ('train_split', float), ('split_seed', int), ('loader_seed', int), ('download', bool),
-                    ('stats_max_batches', int), ('num_workers', int),
-                    ]
-        }
-
-        for config, items in vars_dict.items():
-            for var_name, var_type in items:
-                var = config_file[config].get(var_name)
-                if var is None:
-                    raise KeyError(f"Variable \"{config}:{var_name}\" not found in config file.")
-                if not isinstance(var, var_type):
-                    raise TypeError(f"Variable {var_name} should be {var_type} but is {type(var)}")
-
-        # Precision: accept either explicit 'precision' (str) or legacy 'mixed_precision' (bool).
-        train = config_file['train']
-        precision_val = train.get('precision')
-        mixed_val = train.get('mixed_precision')
-        if precision_val is None and mixed_val is None:
-            raise KeyError("train config must have 'precision' (fp32|fp16|bf16) "
-                           "or legacy 'mixed_precision' (bool).")
-        if precision_val is not None and precision_val not in ('fp32', 'fp16', 'bf16'):
-            raise ValueError(f"train:precision must be fp32|fp16|bf16, got {precision_val!r}.")
-        
-        check_params_ranges()
-        check_fn_dict()
-
-        if config_file['train']['epochs_to_eval'] >= config_file['train']['max_epochs']:
-            raise ValueError('Invalid epochs_to_eval! It should be < max_epochs.')
-
-        # Optional; defaults to 'max' (current behavior) when absent.
-        agg = config_file['train'].get('eval_window_agg', 'max')
-        if agg not in ('max', 'mean', 'last'):
-            raise ValueError(f"Invalid eval_window_agg '{agg}'! Use 'max', 'mean' or 'last'.")
-
-    def _get_evolution_params(self):
-        """Loads and organizes parameters for a new evolution run."""
-        config_file = load_yaml(self.args['config_file'])
-        self._check_vars(config_file)
-
-        self.train_spec = dict(config_file['train'])
-        self.QNAS_spec = dict(config_file['QNAS'])
-        self.files_spec['config_file'] = self.args['config_file']
-
-        ranges = self._get_ranges(config_file)
-        self.QNAS_spec['params_ranges'] = OrderedDict(sorted(ranges.items()))
-        self._get_fn_spec()
-
-        train_override_keys = [
-            'optimizer', 'data_augmentation',
-            'dataset', 'data_path', 'limit_data_value',
-            'multi_objective', 'objectives', 'config_path_dataset', 'gpu_list',
-            'seed', 'workers_per_gpu', 'threads', 'train_timeout',
-        ]
-        for key in train_override_keys:
-            val = self.args.get(key)
-            if val is not None:
-                self.train_spec[key] = val
-
-        self.train_spec['experiment_path'] = self.args['experiment_path']
-
-        # Normalize the precision policy once; downstream code reads
-        # train_spec['precision'] ('fp32'|'fp16'|'bf16').
-        if 'precision' not in self.train_spec and self.train_spec.get('mixed_precision', False):
-            logging.getLogger(__name__).info(
-                "train.precision not set; derived 'fp16' from the legacy "
-                "mixed_precision flag. Set precision: fp16|bf16|fp32 explicitly.")
-        self.train_spec['precision'] = resolve_precision(self.train_spec)
-
-        self._check_objectives()
-
-    def _check_objectives(self):
-        """Validate ``train.objectives`` at parse time, before any training.
-
-        Two checks, both fatal:
-
-        1. Sense resolution: every objective name must match exactly one key
-           of ``dataset_configs/cfg_obj.json`` under the same substring rule
-           the algorithms use (``key in objective``). Zero matches used to be
-           a silently-ignored warning that left
-           ``objective_senses`` shorter than the fitness matrix, flipping the
-           wrong columns; more than one match is ambiguous.
-        2. Producibility: every objective must be provided by the trainer
-           builtins or by one of the configured metric plugins (per
-           METRIC_PROVIDES). Skipped if the config declares a metric this
-           table does not know about (forward compatibility).
-
-        Raises
-        ------
-        ValueError
-            Naming the offending objective and listing the valid options.
-        """
-        objectives = self.train_spec.get('objectives') or []
-        with open(CFG_OBJ_PATH, 'r') as f:
-            senses = json.load(f)['objectives']
-
-        for obj in objectives:
-            matches = [k for k in senses if k in obj]
-            if len(matches) == 0:
-                raise ValueError(
-                    f"Objective '{obj}' matches no sense rule in {CFG_OBJ_PATH}. "
-                    f"Available sense keys: {sorted(senses)}")
-            if len(matches) > 1:
-                raise ValueError(
-                    f"Objective '{obj}' is ambiguous: it matches multiple sense "
-                    f"rules {matches} in {CFG_OBJ_PATH}. Rename the objective or "
-                    f"the rules so exactly one applies.")
-
-        metrics_cfg = self.train_spec.get('metrics') or []
-        metric_names = [m.get('name') for m in metrics_cfg]
-        if not metrics_cfg:
-            # Legacy single-objective configs declare no metrics; the trainer
-            # fills hardware-style names with constant 0.0 defaults.
-            non_builtin = [o for o in objectives if o not in TRAINER_BUILTIN_METRICS]
-            if non_builtin:
-                logging.getLogger(__name__).warning(
-                    "Config declares no metrics; objectives %s will evaluate "
-                    "as the trainer's 0.0 defaults.", non_builtin)
-        elif all(name in METRIC_PROVIDES for name in metric_names):
-            providable = set(TRAINER_BUILTIN_METRICS)
-            for name in metric_names:
-                providable |= METRIC_PROVIDES[name]
-            missing = [o for o in objectives if o not in providable]
-            if missing:
-                raise ValueError(
-                    f"Objectives {missing} are not produced by the configured "
-                    f"metrics {metric_names} nor by the trainer builtins. "
-                    f"Producible names: {sorted(providable)}")
-
-    def _get_fn_spec(self):
-        """Build the ordered gene vocabulary the GA decodes chromosomes with.
-
-        ``fn_list`` is the sorted list of gene names; ``fn_dict`` maps each name
-        to its parameters. Sorting is by natural key, so ``heads_20 ...
-        heads_90`` come out in ascending order and a +/-1 index mutation is a
-        one-step change in the pruning percentage.
-        """
-        self.QNAS_spec['fn_list'] = sorted(
-            self.QNAS_spec['function_dict'].keys(), key=natural_key
-        )
-        self.fn_dict = self.QNAS_spec.pop('function_dict')
-        for item in self.fn_dict.values():
-            item.pop('prob', None)
-
-    def _get_ranges(self, config_file):
-        """  Get the ranges of the numerical parameters to be evolved.
-
-        Args:
-            config_file: dict holding the parameters in the config file.
-
-        Returns:
-            dict containing the extracted ranges.
-        """
-
-        if self.train_spec['optimizer'] == 'Momentum':
-            ranges = {key: val for key, val in config_file['QNAS']['params_ranges'].items()
-                    if key != 'decay' and type(val) == list}
-        else:
-            ranges = {key: val for key, val in config_file['QNAS']['params_ranges'].items()
-                    if type(val) == list}
-
-        # If user provided a value instead of a range, parameter will not be evolved.
-        for key, value in config_file['QNAS']['params_ranges'].items():
-            if type(value) != list:
-                self.train_spec[key] = value
-
-        return ranges
-
-    def _get_continue_params(self):
-        """ Get parameters for the continue evolution phase. The evolution parameters are loaded
-            from previous evolution configuration, except from the maximum number of generations
-            (*max_generations*).
-        """
-
-        self.files_spec['continue_path'] = self.args['continue_path']
-        self.files_spec['previous_QNAS_params'] = os.path.join(
-            self.files_spec['continue_path'], 'log_params_evolution.txt')
-
-        self.files_spec['previous_data_file'] = os.path.join(self.args['continue_path'],
-                                                            'data_QNAS.pkl')
-        self.load_old_params()
-        self.QNAS_spec['max_generations'] = load_yaml(
-                self.args['config_file'])['QNAS']['max_generations']
-
-        self.train_spec['experiment_path'] = self.args['experiment_path']
-
-    def _get_common_params(self):
-        """ Get parameters that are combined/calculated the same way for all phases. """
-
-        self.train_spec['data_path'] = self.args['data_path']
-        #self.data_info = self.get_data_info()
-
-        # if not self.train_spec['eval_batch_size']:
-        #     self.train_spec['eval_batch_size'] = self.data_info.num_valid_ex
-
-        # Calculating parameters based on steps
-        #self._calculate_step_params()
-
-        self.train_spec['phase'] = self.phase
-        self.train_spec['log_level'] = self.args['log_level']
-
-        self.files_spec['log_file'] = os.path.join(self.args['experiment_path'], 'log_QNAS.txt')
-        self.files_spec['data_file'] = os.path.join(self.args['experiment_path'],
-                                                    'data_QNAS.pkl')
-        
-    def get_parameters(self):
-        """ Organize dicts combining the command-line and config_file parameters,
-            joining all the necessary information for each *phase* of the program.
-        """
-
-        if self.phase == 'evolution':
-            self._get_evolution_params()
-        elif self.phase == 'continue_evolution':
-            self._get_continue_params()
-        else:
-            raise ValueError(f"Unknown phase '{self.phase}'; expected "
-                             f"'evolution' or 'continue_evolution'.")
-        self._get_common_params()
-        # Older saved params files lack the precision key; resolve it for
-        # every phase so the trainer always finds a normalized value.
-        self.train_spec['precision'] = resolve_precision(self.train_spec)
-
-    def load_old_params(self):
-        """ Load parameters from *self.files_spec['previous_QNAS_params']* and replace
-            *self.train_spec*, *self.QNAS_spec*, and *self.fn_dict* with the file values.
-        """
-
-        previous_params_file = load_yaml(self.files_spec['previous_QNAS_params'])
-
-        self.train_spec = dict(previous_params_file['train'])
-        self.QNAS_spec = dict(previous_params_file['QNAS'])
-        self.QNAS_spec['params_ranges'] = eval(self.QNAS_spec['params_ranges'])
-        self.fn_dict = previous_params_file['fn_dict']
-    
-    def params_to_logfile(self, params, text_file, nested_level=0):
-        """ Print dictionary *params* to a txt file with nested level formatting.
-
-        Args:
-            params: dictionary with parameters.
-            text_file: file object.
-            nested_level: level of nested dictionary.
-        """
-
-        spacing = '    '
-        if type(params) == dict:
-            for key, value in OrderedDict(sorted(params.items())).items():
-                if type(value) == dict:
-                    if nested_level < 2:
-                        print(f'{nested_level * spacing}{key}:', file=text_file)
-                        self.params_to_logfile(value, text_file, nested_level + 1)
-                    else:
-                        print(f'{nested_level * spacing}{key}: {value}', file=text_file)
-                else:
-                    if type(value) == float:
-                        if value < 1e-3:
-                            print(f'{nested_level * spacing}{key}: {value:.2E}', file=text_file)
-                        else:
-                            print(f'{nested_level * spacing}{key}: {value:.4f}', file=text_file)
-                    else:
-                        print(f'{nested_level * spacing}{key}: {value}', file=text_file)
-                if nested_level == 0:
-                    print('', file=text_file)
-
-    def save_params_logfile(self):
-        """ Helper function to save the parameters in a txt file. """
-        params_dict = {'QNAS': self.QNAS_spec,
-                        'train': self.train_spec,
-                        'files': self.files_spec,
-                        'fn_dict': self.fn_dict}
-
-        params_file_path = os.path.join(self.train_spec['experiment_path'],
-                                        'log_params_evolution.txt')
-
-        with open(params_file_path, mode='w') as text_file:
-            self.params_to_logfile(params_dict, text_file)
+    for key in OVERRIDES:
+        if args.get(key) is not None:
+            params[key] = args[key]
+    params['seed'] = args['seed']
+    return params
