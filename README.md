@@ -14,18 +14,31 @@ The unpruned ViT-Base has 85.8M parameters and ~33.7G FLOPs; the MLP accounts fo
 
 Pruning is surgical: each block's `qkv`/`proj` (and `fc1`/`fc2`) layers are rebuilt with only the survivors, so a pruned candidate really is smaller. Each candidate then fine-tunes **its MLPs and the classifier head** for a few epochs on a class-balanced CIFAR-10 subset, while the **attention layers keep their pretrained weights frozen** (the same split used by the DARTS phase), and is scored on accuracy and FLOPs. The classifier and the pretrained MLPs have separate learning rates (`learning_rate`, `mlp_learning_rate` in `config.yaml`); a large MLP learning rate (1e-3) wipes out the pretrained features within a few steps.
 
+## Data protocol
+
+The CIFAR-10 **test set is held out for the final evaluation only**. Every phase uses the same stratified split of the CIFAR-10 train set (`train_split`, `split_seed` in `config.yaml`):
+
+| Set | Source | DARTS | Search (GA) | `retrain.py` |
+|---|---|---|---|---|
+| train | 90% of CIFAR-10 train | MLP + classifier weights | trains each candidate | trains the final model |
+| val | 10% of CIFAR-10 train | alphas | accuracy objective | picks the best epoch |
+| **test** | official CIFAR-10 test (10,000) | — | — | **one final evaluation** |
+
+The test set is only reachable through `core.data.build_test_dataset`, which only `retrain.py` calls, after training.
+
 ## Project structure
 
 ```
 ├── run_darts_alphas.py        # Phase 1: learn head + MLP-neuron alphas -> darts_alphas/*.json
 ├── vit_transformer_search.py  # DARTS attention/MLP wrappers + training epoch
 ├── run_all_evolution.py       # Phase 2: multi-objective search
+├── retrain.py                 # Phase 3: retrain a Pareto candidate, evaluate once on the test set
 ├── config.yaml                # Search space, ViT and training settings
 ├── algorithms/
 │   └── nsga.py                # pymoo NSGA-II/III ask-tell loop, Pareto archive + hypervolume
 └── core/
     ├── vit.py                 # Alphas I/O + attention-head and MLP-neuron pruning
-    ├── data.py                # CIFAR-10 split, balanced subset, loaders
+    ├── data.py                # CIFAR-10 train/val split, balanced subset, held-out test set
     ├── training.py            # Fine-tune MLPs + classifier, accuracy + FLOPs
     ├── evaluation.py          # Parallel evaluation of a population
     ├── config.py              # Config loading and validation
@@ -48,11 +61,10 @@ CIFAR-10 (~170 MB) and the pretrained ViT weights (~350 MB) are downloaded on fi
 ### 2. Phase 1 — alphas (DARTS)
 
 ```bash
-python run_darts_alphas.py --epochs 1 --limit_train 500 \
-    --output darts_alphas/vit_base_cifar10.json
+python run_darts_alphas.py --config_file config.yaml --epochs 1 --limit_data_value 500
 ```
 
-This short run only checks the pipeline; use more images/epochs (`--limit_train 0` = full train set) for a meaningful head ranking.
+The alphas are written to `vit_alphas_path` from the config (or `--output`). `--limit_data_value` is the total of train + val images (0 = the whole split). This short run only checks the pipeline; use more images/epochs for a meaningful ranking. The run is seeded (`--seed`), so the same command gives the same alphas on the same device.
 
 ### 3. Phase 2 — search
 
@@ -87,6 +99,19 @@ The final Pareto front is printed at the end. `<experiment_path>/pareto_history.
 ```bash
 python -c "import pickle; h=pickle.load(open('experiment_vit/teste1/pareto_history.pkl','rb')); [print(g, 'HV=%.4f' % r['hypervolume'], r['front']) for g, r in h.items()]"
 ```
+
+The search accuracy is a proxy (few epochs, a subset, the validation set). Do not report it as the final result.
+
+### 5. Phase 3 — retrain and final test evaluation
+
+Pick candidates from the final Pareto front by their `id` and retrain each one with the **same config file** used by the search:
+
+```bash
+python retrain.py --config_file config.yaml \
+    --pareto_history experiment_vit/teste1/pareto_history.pkl --id 1_3 --epochs 10
+```
+
+The candidate trains its MLPs + classifier on the train split (`--limit_data_value 0` = all 45,000 images), the epoch with the best validation accuracy is kept, and only then is the test set loaded and evaluated once. `retrain_results/<id>/results.json` holds the chromosome, the validation curve, the **test accuracy**, FLOPs and parameters; `model_state.pt` holds the weights (rebuild the pruned architecture with the same chromosome and alphas file to load them). A chromosome can also be given directly with `--chromosome 3 5 7 ...`.
 
 ## License
 

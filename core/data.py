@@ -1,7 +1,16 @@
 """CIFAR-10 served at 224x224 with ImageNet normalization for the pretrained ViT.
 
-The candidates are trained on a class-balanced subset of the CIFAR-10 *train*
-set, split into train/validation; the test set is not used by the search.
+Data protocol (the same for every phase):
+
+- **train**: a stratified ``train_split`` share of the CIFAR-10 train set
+  (``split_seed``). DARTS trains the MLP + classifier weights on it, the search
+  trains every candidate on it, and ``retrain.py`` trains the final model on it.
+- **val**: the rest of the CIFAR-10 train set. DARTS updates the alphas on it,
+  the search scores candidate accuracy on it, and ``retrain.py`` picks the best
+  epoch on it.
+- **test**: the official CIFAR-10 test set, a separate file. It is reachable
+  only through ``build_test_dataset``, which only ``retrain.py`` calls, once,
+  after training, for the final evaluation.
 """
 import numpy as np
 import torch
@@ -14,6 +23,10 @@ NUM_CLASSES = 10
 INPUT_SHAPE = (3, 224, 224)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+
+
+def _transform():
+    return Compose([Resize(INPUT_SHAPE[1:]), ToTensor(), Normalize(IMAGENET_MEAN, IMAGENET_STD)])
 
 
 class _TransformWrapper(Dataset):
@@ -42,8 +55,11 @@ def _balanced_subset(dataset, labels, k, rng):
 
 
 def build_datasets(data_path: str, train_split: float, split_seed: int, limit_data_value: int):
-    """Stratified train/val split of the CIFAR-10 train set, optionally limited to
-    ``limit_data_value`` images in total (class-balanced on both sides)."""
+    """Train/val datasets: a stratified split of the CIFAR-10 *train* set, optionally
+    limited to ``limit_data_value`` images in total (class-balanced on both sides).
+
+    Never touches the test set.
+    """
     raw = tvd.CIFAR10(data_path, train=True, download=True, transform=None)
     labels = np.asarray(raw.targets).astype(int)
 
@@ -58,8 +74,16 @@ def build_datasets(data_path: str, train_split: float, split_seed: int, limit_da
         train_ds = _balanced_subset(train_ds, labels[train_idx], k_train, rng)
         val_ds = _balanced_subset(val_ds, labels[val_idx], k_val, rng)
 
-    tfm = Compose([Resize(INPUT_SHAPE[1:]), ToTensor(), Normalize(IMAGENET_MEAN, IMAGENET_STD)])
+    tfm = _transform()
     return _TransformWrapper(train_ds, tfm), _TransformWrapper(val_ds, tfm)
+
+
+def build_test_dataset(data_path: str):
+    """The official CIFAR-10 test set (10,000 images).
+
+    Reserved for the final evaluation in ``retrain.py``: no other phase may call this.
+    """
+    return tvd.CIFAR10(data_path, train=False, download=True, transform=_transform())
 
 
 def build_loaders(params: dict, device: str):

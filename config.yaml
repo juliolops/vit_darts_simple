@@ -28,11 +28,13 @@ mlp_learning_rate: 1.0e-4   # pretrained MLPs; 1e-3 destroys the pretrained feat
 weight_decay: 1.0e-4
 
 # --- CIFAR-10 (224x224 + ImageNet normalization) ---
+# The CIFAR-10 train set is split into train/val with these values in every phase
+# (DARTS, search, retrain). The official test set is used only by retrain.py.
 data_path: data
 train_split: 0.9
 split_seed: 2025
 loader_seed: 777
-limit_data_value: 1000   # images per candidate (train + val), class-balanced
+limit_data_value: 1000   # search: images per candidate (train + val), class-balanced
 num_workers: 2
 
 threads: 1               # candidates evaluated concurrently (keep 1 on Apple MPS)

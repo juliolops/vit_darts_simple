@@ -4,6 +4,7 @@ data/
 # Run artifacts
 darts_alphas/
 exp*/
+retrain_results/
 
 # Python
 __pycache__/

@@ -7,62 +7,44 @@ the attention layers stay pretrained. The resulting per-head and per-neuron
 weights are written to JSON; the genetic search (``run_all_evolution.py``)
 then reads that file to decide which heads and neurons a pruning percentage keeps.
 
-    python run_darts_alphas.py --epochs 1 --limit_train 2000 \
-        --output darts_alphas/vit_base_cifar10.json
+The train/val split comes from ``config.yaml`` (``train_split``, ``split_seed``),
+so DARTS and the search use the same images. The CIFAR-10 test set is never read.
+
+    python run_darts_alphas.py --config_file config.yaml --epochs 3 --limit_data_value 10000
 """
 import argparse
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset, random_split
-from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
 
+from core.config import load_config
+from core.data import build_datasets
+from core.utils import resolve_device, set_global_seeds
 from core.vit import extract_alphas, save_alphas
 from vit_transformer_search import build_darts_vit, train_darts_epoch
 
 
-def _resolve_device() -> torch.device:
-    """CUDA if present, else Apple MPS, else CPU (same order as the search)."""
-    if torch.cuda.is_available():
-        return torch.device('cuda')
-    if torch.backends.mps.is_available():
-        return torch.device('mps')
-    return torch.device('cpu')
-
-
 def main(args):
-    device = _resolve_device()
+    set_global_seeds(args.seed)
+    params = load_config({'config_file': args.config_file, 'seed': args.seed,
+                          'data_path': args.data_path,
+                          'limit_data_value': args.limit_data_value})
+    output = args.output or params['vit_alphas_path']
+    device = resolve_device()
     print(f"[darts] device: {device}")
 
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    full = datasets.CIFAR10(root=args.data_path, train=True, download=True, transform=transform)
-
-    # DARTS needs a train/val split: weights are updated on train, the
-    # architecture alphas on val (that separation is the point of DARTS).
-    if args.limit_train > 0 and args.limit_train < len(full):
-        generator = torch.Generator().manual_seed(args.seed)
-        idx = torch.randperm(len(full), generator=generator)[:args.limit_train].tolist()
-        full = Subset(full, idx)
-
-    train_size = len(full) // 2
-    val_size = len(full) - train_size
-    train_ds, val_ds = random_split(
-        full, [train_size, val_size],
-        generator=torch.Generator().manual_seed(args.seed))
-
-    pin = torch.cuda.is_available()
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.num_workers, pin_memory=pin)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=True,
-                            num_workers=args.num_workers, pin_memory=pin)
+    train_ds, val_ds = build_datasets(params['data_path'], params['train_split'],
+                                      params['split_seed'], params['limit_data_value'])
+    common = dict(batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
+                  pin_memory=device.startswith('cuda'),
+                  generator=torch.Generator().manual_seed(args.seed))
+    train_loader = DataLoader(train_ds, **common)
+    val_loader = DataLoader(val_ds, **common)
     print(f"[darts] train={len(train_ds)} val={len(val_ds)} batch={args.batch_size}")
 
     model, weight_params, alpha_params = build_darts_vit(
-        model_name=args.model_name, num_classes=10)
+        model_name=params['vit_model_name'], num_classes=10)
     model = model.to(device)
 
     optimizer_w = torch.optim.AdamW(weight_params, lr=1e-3, weight_decay=1e-4)
@@ -76,8 +58,8 @@ def main(args):
                           criterion=criterion, device=device)
 
     alphas = extract_alphas(model)
-    save_alphas(args.output, alphas)
-    print(f"\n[darts] alphas salvos em {args.output}")
+    save_alphas(output, alphas)
+    print(f"\n[darts] alphas salvos em {output}")
     for i, (head_w, mlp_w) in enumerate(zip(alphas['heads'], alphas['mlp'])):
         ranked = sorted(range(len(head_w)), key=lambda h: head_w[h], reverse=True)
         print(f"  bloco {i:02d}: cabeças por importância {ranked} | "
@@ -85,17 +67,19 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=str, default='darts_alphas/vit_base_cifar10.json',
-                        help='Where to write the alphas JSON.')
-    parser.add_argument('--data_path', type=str, default='data',
-                        help='CIFAR-10 root directory.')
-    parser.add_argument('--model_name', type=str, default='vit_base_patch16_224')
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--config_file', type=str, default='config.yaml',
+                        help='Experiment config: ViT model, data split and alphas path.')
+    parser.add_argument('--output', type=str, default=None,
+                        help='Where to write the alphas JSON (default: vit_alphas_path in the config).')
+    parser.add_argument('--data_path', type=str, default=None,
+                        help='CIFAR-10 root directory (default: data_path in the config).')
+    parser.add_argument('--limit_data_value', type=int, default=0,
+                        help='Images used in total, train + val, class-balanced '
+                             '(0 = the whole train/val split, 50,000 images).')
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--num_workers', type=int, default=2)
-    parser.add_argument('--limit_train', type=int, default=0,
-                        help='Use only this many training images (0 = full CIFAR-10 train set). '
-                             'A small value makes the DARTS phase feasible on a laptop.')
     parser.add_argument('--seed', type=int, default=42)
     main(parser.parse_args())
