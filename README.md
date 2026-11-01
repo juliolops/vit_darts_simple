@@ -49,12 +49,126 @@ The test set is only reachable through `core.data.build_test_dataset`, which onl
 
 ### 1. Environment
 
+The environment is built with [uv](https://docs.astral.sh/uv/), a fast Python package and environment manager. It needs no root access and no conda, and it downloads its own Python 3.10, so it works even on servers whose system Python is older (e.g. Python 3.8 on Ubuntu 20.04).
+
+Requirements on the machine: an NVIDIA driver (check with `nvidia-smi`), `curl`, and internet access. The CUDA toolkit is **not** needed: the PyTorch wheels ship their own CUDA libraries.
+
+#### 1.1 Choose where everything is stored
+
+On shared servers the home directory often has a small quota. uv, PyTorch and Hugging Face write their caches and downloads (several GB) to `~` by default, which fails with `No space left on device`. Pick a directory with free space (here `/data-ext/$USER`) and point every cache there with an `env.sh` file:
+
+```bash
+export BASE=/data-ext/$USER          # a directory with plenty of free space
+mkdir -p $BASE
+
+cat > $BASE/env.sh << EOF
+export PATH=$BASE/uv/bin:\$PATH                  # the uv executable
+export UV_CACHE_DIR=$BASE/cache/uv              # uv download cache
+export UV_PYTHON_INSTALL_DIR=$BASE/uv/python    # Python versions installed by uv
+export PIP_CACHE_DIR=$BASE/cache/pip            # pip cache, if pip is ever used
+export HF_HOME=$BASE/cache/hf                   # pretrained ViT weights (timm / Hugging Face)
+export TORCH_HOME=$BASE/cache/torch             # torch hub cache
+EOF
+
+source $BASE/env.sh
+```
+
+If your home directory has enough space, you can skip this step and the `source $BASE/env.sh` lines below.
+
+#### 1.2 Install uv
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=$BASE/uv/bin UV_NO_MODIFY_PATH=1 sh
+which uv        # should print $BASE/uv/bin/uv
+```
+
+#### 1.3 Create the virtual environment
+
+From the repository root:
+
+```bash
+uv venv .venv --python 3.10      # downloads Python 3.10 if needed
+source .venv/bin/activate
+python --version                 # Python 3.10.x
+```
+
+The environment lives in `.venv/` inside the repository and is ignored by git.
+
+#### 1.4 Install the dependencies (PyTorch first)
+
+```bash
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+uv pip install -r requirements.txt
+```
+
+**Install PyTorch first, from the index that matches your driver.** `requirements.txt` does not list `torch`, but `timm` depends on it. If `torch` is not installed yet, `timm` pulls the newest PyTorch from PyPI, which may be built for a CUDA version your driver does not support. Pick the index from the `CUDA Version` shown by `nvidia-smi` (the maximum CUDA version the driver supports):
+
+| `nvidia-smi` CUDA Version | Index URL |
+|---|---|
+| 12.1 – 12.3 | `https://download.pytorch.org/whl/cu121` |
+| 12.4 – 12.5 | `https://download.pytorch.org/whl/cu124` |
+| ≥ 12.6 | `https://download.pytorch.org/whl/cu126` |
+| 11.8 – 12.0 | `https://download.pytorch.org/whl/cu118` |
+
+#### 1.5 Check the GPUs
+
+```bash
+python -c "import sys, torch; print('Python', sys.version.split()[0], '| CUDA:', torch.cuda.is_available(), '| GPUs:', torch.cuda.device_count())"
+```
+
+Expected: `CUDA: True` and the number of GPUs listed by `nvidia-smi`. With `CUDA: False` everything runs on the CPU, which is far too slow for a ViT-Base.
+
+#### 1.6 Every new terminal
+
+```bash
+source /data-ext/$USER/env.sh                 # the env.sh from step 1.1 (adjust if BASE differs)
+cd /path/to/vit_darts_simple && source .venv/bin/activate
+```
+
+#### 1.7 Long runs over SSH
+
+A process started in a plain SSH terminal dies when the connection drops. Run the phases inside `tmux`:
+
+```bash
+tmux new -s vit          # start a session (then activate the environment as in 1.6)
+# Ctrl+B then D          # detach: the run keeps going
+tmux attach -t vit       # reattach later
+```
+
+To keep a copy of the output, append `2>&1 | tee <name>.log` to any command (add `*.log` to `.gitignore` so the logs are not committed).
+
+#### 1.8 What stays out of git
+
+| Created by the setup | Location | In git? |
+|---|---|---|
+| Virtual environment | `.venv/` (repository) | No, listed in `.gitignore` |
+| CIFAR-10 download | `data/` (repository) | No, listed in `.gitignore` |
+| Experiment outputs | `experiment_vit/`, `darts_alphas/`, `retrain_results/` | No, listed in `.gitignore` |
+| uv, its Python, caches, `env.sh` | `$BASE` (outside the repository) | No, outside the repository |
+
+The exact package versions are not pinned yet: `requirements.txt` lists only names, so a fresh install takes the newest compatible versions. For a fully reproducible environment, the project can be moved to uv's project mode (`pyproject.toml` + a committed `uv.lock`).
+
+#### 1.9 Troubleshooting
+
+| Error | Cause | Fix |
+|---|---|---|
+| `No space left on device` while installing | The cache is in a full home directory | Do step 1.1, then `rm -rf ~/.cache/uv` |
+| `ModuleNotFoundError: No module named 'torch'` | The environment is not active, so `python` is the system Python | `source .venv/bin/activate` (the prompt shows `(.venv)`) |
+| `CUDA: False`, or `torch` asks for CUDA 13 | PyTorch came from PyPI instead of the CUDA index | `uv pip install --reinstall torch torchvision --index-url <index from 1.4>` |
+| `NoWritablePkgsDirError` (conda) | A `.condarc` points `pkgs_dirs` to a directory you cannot write | Not needed with uv; for conda, check `conda config --show-sources` |
+| Warning: `unauthenticated requests to the HF Hub` | The ViT weights are downloaded without a Hugging Face token | Harmless; the download still works |
+
+<details>
+<summary>Alternative: conda</summary>
+
 ```bash
 conda create -n vitnas python=3.10 -y
 conda activate vitnas
-pip install torch torchvision
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 ```
+
+</details>
 
 CIFAR-10 (~170 MB) and the pretrained ViT weights (~350 MB) are downloaded on first use.
 
