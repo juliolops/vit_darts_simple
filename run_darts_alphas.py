@@ -14,7 +14,9 @@ Stability safeguards (defaults below): a lower learning rate for the pretrained
 MLP weights (``--lr_w 1e-4``), gradient clipping (``--grad_clip 5``), a warm-up in
 which only the weights train and the alphas stay fixed (``--warmup_epochs 1``), and
 the alphas of the epoch with the best validation accuracy are the ones saved, so
-a late divergence cannot spoil them. Per-epoch metrics go to ``<output>.history.json``.
+a late divergence cannot spoil them. Per-epoch metrics and an alphas summary
+(head ranking, min/max/std of the head and MLP weights per block) are printed after
+every epoch and written to ``<output>.history.json``, updated as training runs.
 
     python run_darts_alphas.py --config_file config.yaml --epochs 3 --limit_data_value 10000
 """
@@ -31,6 +33,45 @@ from core.data import build_datasets
 from core.utils import resolve_device, set_global_seeds
 from core.vit import extract_alphas, save_alphas
 from vit_transformer_search import build_darts_vit, evaluate, train_darts_epoch
+
+
+def summarize_alphas(alphas):
+    """Per-block summary of the ``N * softmax`` weights: head ranking and the
+    min/max/std of the head and MLP-neuron weights (all average 1 by construction)."""
+    def stats(w):
+        mean = sum(w) / len(w)
+        std = (sum((x - mean) ** 2 for x in w) / len(w)) ** 0.5
+        return min(w), max(w), std
+
+    summary = []
+    for i, (head_w, mlp_w) in enumerate(zip(alphas['heads'], alphas['mlp'])):
+        h_min, h_max, h_std = stats(head_w)
+        m_min, m_max, m_std = stats(mlp_w)
+        summary.append({
+            'block': i,
+            'head_ranking': sorted(range(len(head_w)), key=lambda h: head_w[h], reverse=True),
+            'head_weights': [round(w, 4) for w in head_w],
+            'head_min': h_min, 'head_max': h_max, 'head_std': h_std,
+            'mlp_min': m_min, 'mlp_max': m_max, 'mlp_std': m_std,
+        })
+    return summary
+
+
+def print_alphas_summary(summary, indent='  '):
+    for b in summary:
+        print(f"{indent}bloco {b['block']:02d}: cabeças {b['head_ranking']} "
+              f"(peso {b['head_min']:.2f}-{b['head_max']:.2f}) | "
+              f"MLP min={b['mlp_min']:.4f} max={b['mlp_max']:.4f} std={b['mlp_std']:.4f}")
+    worst_head = max(b['head_max'] for b in summary)
+    worst_mlp = max(b['mlp_max'] for b in summary)
+    print(f"{indent}maior peso: cabeça={worst_head:.2f} | neurônio MLP={worst_mlp:.2f} "
+          f"(1.0 = uniforme; dezenas ou mais = peso concentrado)")
+
+
+def write_history(path, best_epoch, best_acc, args, history):
+    with open(path, 'w') as f:
+        json.dump({'best_epoch': best_epoch, 'best_val_acc': best_acc, 'args': vars(args),
+                   'epochs': history}, f, indent=2)
 
 
 def main(args):
@@ -70,6 +111,8 @@ def main(args):
     eval_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
                              num_workers=args.num_workers, pin_memory=device.startswith('cuda'))
     best_acc, best_epoch, alphas, history = -1.0, None, None, []
+    history_path = os.path.splitext(output)[0] + '.history.json'
+    os.makedirs(os.path.dirname(os.path.abspath(history_path)), exist_ok=True)
 
     for epoch in range(args.epochs):
         update_alphas = epoch >= warmup
@@ -81,26 +124,29 @@ def main(args):
                           update_alphas=update_alphas, grad_clip=args.grad_clip)
 
         val_loss, val_acc = evaluate(model, eval_loader, criterion, device)
+        epoch_alphas = extract_alphas(model)
+        summary = summarize_alphas(epoch_alphas)
         history.append({'epoch': epoch + 1, 'update_alphas': update_alphas,
-                        'val_loss': val_loss, 'val_acc': val_acc})
+                        'val_loss': val_loss, 'val_acc': val_acc, 'alphas': summary})
         print(f"[darts] época {epoch + 1}: validação completa -> loss={val_loss:.4f} acc={val_acc:.2f}%")
+        if update_alphas:
+            print(f"[darts] alphas ao fim da época {epoch + 1}:")
+            print_alphas_summary(summary)
+        else:
+            print("[darts] warm-up: alphas ainda uniformes (todos os pesos = 1.0)")
 
         # Only epochs that trained the alphas compete: warm-up alphas are still uniform.
         if update_alphas and val_acc > best_acc:
-            best_acc, best_epoch, alphas = val_acc, epoch + 1, extract_alphas(model)
+            best_acc, best_epoch, alphas = val_acc, epoch + 1, epoch_alphas
             print(f"[darts] nova melhor época ({best_epoch}): alphas guardados")
 
+        # Rewritten every epoch, so it can be inspected (or plotted) while training runs.
+        write_history(history_path, best_epoch, best_acc, args, history)
+
     save_alphas(output, alphas)
-    history_path = os.path.splitext(output)[0] + '.history.json'
-    with open(history_path, 'w') as f:
-        json.dump({'best_epoch': best_epoch, 'best_val_acc': best_acc, 'args': vars(args),
-                   'epochs': history}, f, indent=2)
     print(f"\n[darts] alphas da época {best_epoch} (val acc {best_acc:.2f}%) salvos em {output}")
     print(f"[darts] histórico por época em {history_path}")
-    for i, (head_w, mlp_w) in enumerate(zip(alphas['heads'], alphas['mlp'])):
-        ranked = sorted(range(len(head_w)), key=lambda h: head_w[h], reverse=True)
-        print(f"  bloco {i:02d}: cabeças por importância {ranked} | "
-              f"pesos MLP min={min(mlp_w):.4f} max={max(mlp_w):.4f}")
+    print_alphas_summary(summarize_alphas(alphas))
 
 
 if __name__ == '__main__':
