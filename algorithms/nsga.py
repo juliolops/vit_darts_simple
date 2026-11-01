@@ -8,9 +8,15 @@ reference-direction niching (NSGA-III). Evaluation stays ours: every
 generation is handed to ``eval_func`` as one batch, which trains the
 candidates in parallel worker processes.
 
-A global archive of every non-dominated candidate seen so far is saved after
-each generation to ``<experiment_path>/pareto_history.pkl``.
+After each generation ``<experiment_path>/pareto_history.pkl`` is rewritten with,
+per generation: the global archive of every non-dominated candidate seen so far
+(``front``) and its hypervolume, every candidate evaluated in that generation
+(``evaluated``), the generation's best candidate (``best``: highest accuracy,
+fewest FLOPs on ties) and the best candidate of the whole search so far
+(``best_so_far``). The same data, readable without Python, goes to
+``<experiment_path>/generations.json``.
 """
+import json
 import os
 import pickle
 
@@ -36,6 +42,11 @@ OBJECTIVES = ('best_accuracy', 'total_flops')
 def to_minimization(results) -> np.ndarray:
     """``[{best_accuracy, total_flops}, ...]`` -> (N, 2) array to minimize."""
     return np.array([[-r['best_accuracy'], r['total_flops']] for r in results], dtype=float)
+
+
+def best_candidate(candidates):
+    """Highest accuracy; on ties, the fewest FLOPs."""
+    return max(candidates, key=lambda c: (c['best_accuracy'], -c['total_flops']))
 
 
 def hypervolume(F: np.ndarray) -> float:
@@ -75,6 +86,7 @@ def run_search(algorithm_name, eval_func, experiment_path, percentages, populati
 
     archive_ids, archive_X, archive_F = [], np.empty((0, num_genes), int), np.empty((0, 2))
     history = {}
+    best_so_far = None
     generation = 0
     while algorithm.has_next():
         pop = algorithm.ask()
@@ -93,16 +105,33 @@ def run_search(algorithm_name, eval_func, experiment_path, percentages, populati
         archive_ids = [archive_ids[i] for i in front]
         archive_X, archive_F = archive_X[front], archive_F[front]
 
+        def point(cid, x, f):
+            genes = [int(g) for g in x]
+            return {'id': cid, 'chromosome': genes,
+                    'percentages': [percentages[g] for g in genes],
+                    'best_accuracy': float(-f[0]), 'total_flops': float(f[1])}
+
+        evaluated = [point(f"{generation}_{i}", x, f) for i, (x, f) in enumerate(zip(X, F))]
+        best = best_candidate(evaluated)
+        if best_so_far is None or best_candidate([best_so_far, best]) is best:
+            best_so_far = best
+
         history[generation] = {
-            'front': [{'id': cid, 'chromosome': x.tolist(),
-                       'best_accuracy': float(-f[0]), 'total_flops': float(f[1])}
-                      for cid, x, f in zip(archive_ids, archive_X, archive_F)],
+            'front': [point(cid, x, f) for cid, x, f in zip(archive_ids, archive_X, archive_F)],
             'hypervolume': hypervolume(archive_F),
+            'evaluated': evaluated,
+            'best': best,
+            'best_so_far': best_so_far,
         }
         with open(os.path.join(experiment_path, 'pareto_history.pkl'), 'wb') as f:
             pickle.dump(history, f)
+        with open(os.path.join(experiment_path, 'generations.json'), 'w') as f:
+            json.dump({str(g): rec for g, rec in history.items()}, f, indent=2)
         logger.info(f"Gen {generation} -> evaluated {len(X)}, Hypervolume = "
                     f"{history[generation]['hypervolume']:.4f}, Global Front Size = {len(front)}")
+        logger.info(f"Gen {generation} -> best: {best['id']} acc={best['best_accuracy']:.4f} "
+                    f"flops={best['total_flops']:.4g} percentages={best['percentages']} | "
+                    f"best so far: {best_so_far['id']} acc={best_so_far['best_accuracy']:.4f}")
         generation += 1
 
     return [(cid, x.tolist(), {'best_accuracy': float(-f[0]), 'total_flops': float(f[1])})

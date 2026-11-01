@@ -201,7 +201,9 @@ After every epoch the model is scored on the **whole** validation split, and the
 
 After every epoch that trains the alphas, the script also prints an alphas summary, so their drift can be followed while training runs: per block, the heads by importance, the range of the head weights, and the min/max/std of the MLP-neuron weights, followed by the largest head and MLP weight over all blocks. The same summary is printed for the saved (best) alphas at the end. All weights average 1: values near 1 mean almost uniform importances, and a max far above 1 (tens or more) means the weight has concentrated on a few heads or neurons.
 
-`<output>.history.json` is rewritten after every epoch, so it can be read while the run is in progress (and survives an interrupted run). Each epoch entry holds `val_loss`, `val_acc` and `alphas`: one record per block with `head_ranking`, `head_weights` (the 12 head weights), `head_min/max/std` and `mlp_min/max/std`. For example, the largest MLP weight per epoch:
+The **full alphas of every epoch** (the 12 head weights and the 3072 MLP-neuron weights of every block, in the same format as the output file) are saved to `<output stem>_epochs/epoch_NN.json`, e.g. `darts_alphas/vit_base_cifar10_epochs/epoch_03.json`. Any of them can be passed to the search by pointing `vit_alphas_path` in the config at it. The output file itself is written as soon as a new best epoch appears, so an interrupted run still leaves the best alphas found so far.
+
+`<output>.history.json` is rewritten after every epoch, so it can be read while the run is in progress (and survives an interrupted run). Each epoch entry holds `val_loss`, `val_acc`, `alphas_file` (that epoch's full alphas) and `alphas`: one record per block with `head_ranking`, `head_weights` (the 12 head weights), `head_min/max/std` and `mlp_min/max/std`. For example, the largest MLP weight per epoch:
 
 ```bash
 python -c "import json; h=json.load(open('darts_alphas/vit_base_cifar10.history.json')); [print(e['epoch'], '%.2f%%' % e['val_acc'], 'max MLP=%.2f' % max(b['mlp_max'] for b in e['alphas'])) for e in h['epochs']]"
@@ -235,17 +237,37 @@ The evaluation picks CUDA, then Apple MPS, then CPU; keep `--threads 1` on MPS (
 
 ### 4. Results
 
-The final Pareto front is printed at the end. `<experiment_path>/pareto_history.pkl` holds, per generation, the non-dominated set of every candidate evaluated so far and its hypervolume; `log.txt` has the search log:
+The final Pareto front is printed at the end. After **every generation** the search rewrites two files in `<experiment_path>` with the same content: `pareto_history.pkl` (read by `retrain.py`) and `generations.json` (readable without Python). Each generation holds:
+
+| Key | Content |
+|---|---|
+| `front` | Non-dominated set of every candidate evaluated so far (global archive) |
+| `hypervolume` | Hypervolume of that front (should grow over the generations) |
+| `evaluated` | Every candidate trained in this generation |
+| `best` | The generation's best candidate: highest validation accuracy, fewest FLOPs on ties |
+| `best_so_far` | The best candidate of the whole search up to this generation |
+
+Every candidate record has `id` (`<generation>_<index>`), `chromosome` (gene indices into `percentages`), `percentages` (heads kept per block, in %), `best_accuracy` and `total_flops`. `log.txt` has the search log, with one line per generation for the hypervolume and one for the best candidate.
+
+The best candidate (accuracy and FLOPs) of each generation:
+
+```bash
+python -c "import json; h=json.load(open('experiment_vit/teste1/generations.json')); [print(g, r['best']['id'], 'acc=%.4f' % r['best']['best_accuracy'], 'GFLOPs=%.2f' % (r['best']['total_flops']/1e9), '| best so far:', r['best_so_far']['id']) for g, r in h.items()]"
+```
+
+The Pareto front and hypervolume per generation:
 
 ```bash
 python -c "import pickle; h=pickle.load(open('experiment_vit/teste1/pareto_history.pkl','rb')); [print(g, 'HV=%.4f' % r['hypervolume'], r['front']) for g, r in h.items()]"
 ```
 
+Since the files are rewritten after each generation, an interrupted search keeps every finished generation.
+
 The search accuracy is a proxy (few epochs, a subset, the validation set). Do not report it as the final result.
 
 ### 5. Phase 3 — retrain and final test evaluation
 
-Pick candidates from the final Pareto front by their `id` and retrain each one with the **same config file** used by the search:
+Pick candidates from the final Pareto front (or any evaluated candidate, e.g. a generation's `best`) by their `id` and retrain each one with the **same config file** used by the search:
 
 ```bash
 python retrain.py --config_file config.yaml \

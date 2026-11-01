@@ -14,7 +14,9 @@ Stability safeguards (defaults below): a lower learning rate for the pretrained
 MLP weights (``--lr_w 1e-4``), gradient clipping (``--grad_clip 5``), a warm-up in
 which only the weights train and the alphas stay fixed (``--warmup_epochs 1``), and
 the alphas of the epoch with the best validation accuracy are the ones saved, so
-a late divergence cannot spoil them. Per-epoch metrics and an alphas summary
+a late divergence cannot spoil them; they are written as soon as a new best epoch
+appears, so an interrupted run keeps them. The full alphas (heads and MLP neurons)
+of every epoch go to ``<output stem>_epochs/epoch_NN.json``. Per-epoch metrics and an alphas summary
 (head ranking, min/max/std of the head and MLP weights per block) are printed after
 every epoch and written to ``<output>.history.json``, updated as training runs.
 
@@ -111,8 +113,10 @@ def main(args):
     eval_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
                              num_workers=args.num_workers, pin_memory=device.startswith('cuda'))
     best_acc, best_epoch, alphas, history = -1.0, None, None, []
-    history_path = os.path.splitext(output)[0] + '.history.json'
-    os.makedirs(os.path.dirname(os.path.abspath(history_path)), exist_ok=True)
+    stem = os.path.splitext(output)[0]
+    history_path = stem + '.history.json'
+    epochs_dir = stem + '_epochs'   # full alphas of every epoch
+    os.makedirs(epochs_dir, exist_ok=True)
 
     for epoch in range(args.epochs):
         update_alphas = epoch >= warmup
@@ -125,9 +129,12 @@ def main(args):
 
         val_loss, val_acc = evaluate(model, eval_loader, criterion, device)
         epoch_alphas = extract_alphas(model)
+        epoch_path = os.path.join(epochs_dir, f'epoch_{epoch + 1:02d}.json')
+        save_alphas(epoch_path, epoch_alphas)   # heads + MLP neurons, same format as the output
         summary = summarize_alphas(epoch_alphas)
         history.append({'epoch': epoch + 1, 'update_alphas': update_alphas,
-                        'val_loss': val_loss, 'val_acc': val_acc, 'alphas': summary})
+                        'val_loss': val_loss, 'val_acc': val_acc,
+                        'alphas_file': epoch_path, 'alphas': summary})
         print(f"[darts] época {epoch + 1}: validação completa -> loss={val_loss:.4f} acc={val_acc:.2f}%")
         if update_alphas:
             print(f"[darts] alphas ao fim da época {epoch + 1}:")
@@ -138,7 +145,9 @@ def main(args):
         # Only epochs that trained the alphas compete: warm-up alphas are still uniform.
         if update_alphas and val_acc > best_acc:
             best_acc, best_epoch, alphas = val_acc, epoch + 1, epoch_alphas
-            print(f"[darts] nova melhor época ({best_epoch}): alphas guardados")
+            save_alphas(output, alphas)   # saved right away, so an interrupted run keeps them
+            print(f"[darts] nova melhor época ({best_epoch}): alphas salvos em {output}")
+        print(f"[darts] alphas da época {epoch + 1} salvos em {epoch_path}")
 
         # Rewritten every epoch, so it can be inspected (or plotted) while training runs.
         write_history(history_path, best_epoch, best_acc, args, history)
