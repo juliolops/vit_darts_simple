@@ -108,7 +108,32 @@ def build_darts_vit(model_name='vit_base_patch16_224', num_classes=1000):
         
     return model, weight_params, alpha_params
 
-def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_alpha, criterion, device):
+def _clip(optimizer, max_norm):
+    """Clip the gradient norm of every parameter handled by ``optimizer`` (no-op if max_norm <= 0)."""
+    if max_norm and max_norm > 0:
+        params = [p for group in optimizer.param_groups for p in group['params'] if p.grad is not None]
+        torch.nn.utils.clip_grad_norm_(params, max_norm)
+
+
+@torch.no_grad()
+def evaluate(model, loader, criterion, device):
+    """Mean loss and top-1 accuracy (%) of ``model`` over the whole ``loader``."""
+    model.eval()
+    total_loss, correct, total = 0.0, 0, 0
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        logits = model(x)
+        total_loss += criterion(logits, y).item() * y.size(0)
+        correct += (logits.argmax(1) == y).sum().item()
+        total += y.size(0)
+    return total_loss / max(total, 1), 100.0 * correct / max(total, 1)
+
+
+def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_alpha, criterion, device,
+                      update_alphas=True, grad_clip=5.0):
+    """One DARTS epoch. With ``update_alphas=False`` (warm-up) only the MLP + classifier
+    weights are trained and the alphas stay fixed. ``grad_clip`` caps the gradient norm
+    of both the weights and the alphas, so a single bad batch cannot blow up the model."""
     model.train()
     
     val_iter = iter(val_loader)
@@ -140,10 +165,17 @@ def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_al
         # ETAPA 1: Atualizar Arquitetura (Alphas) com dados de Validação
         # ---------------------------------------------------------
         optimizer_alpha.zero_grad()
-        val_logits = model(val_X)
-        loss_alpha = criterion(val_logits, val_y)
-        loss_alpha.backward()
-        optimizer_alpha.step()
+        if update_alphas:
+            val_logits = model(val_X)
+            loss_alpha = criterion(val_logits, val_y)
+            loss_alpha.backward()
+            _clip(optimizer_alpha, grad_clip)
+            optimizer_alpha.step()
+        else:
+            # Warm-up: alphas frozen, the validation batch is only monitored.
+            with torch.no_grad():
+                val_logits = model(val_X)
+                loss_alpha = criterion(val_logits, val_y)
         
         # Acurácia Top-1 Validação
         _, val_preds = torch.max(val_logits, 1)
@@ -161,7 +193,9 @@ def train_darts_epoch(model, train_loader, val_loader, optimizer_w, optimizer_al
         trn_logits = model(trn_X)
         loss_w = criterion(trn_logits, trn_y)
         loss_w.backward()
+        _clip(optimizer_w, grad_clip)
         optimizer_w.step()
+        optimizer_alpha.zero_grad()  # drop the alpha gradients left by loss_w.backward()
         
         # Acurácia Top-1 Treino
         _, trn_preds = torch.max(trn_logits, 1)
