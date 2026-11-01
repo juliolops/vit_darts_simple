@@ -16,3 +16,14 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Virtual environments / uv
+.venv*/
+env/
+.python-version
+uv/
+.uv/
+cache/
+.cache/
+env.sh
+setup_*.sh
