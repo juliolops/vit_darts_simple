@@ -199,7 +199,13 @@ python run_darts_alphas.py --config_file config.yaml --epochs 10 --limit_data_va
 
 After every epoch the model is scored on the **whole** validation split, and the alphas saved are those of the epoch with the best validation accuracy (among the epochs that updated the alphas), not the last one. The per-epoch loss/accuracy, the best epoch and the arguments are written to `<output>.history.json` (e.g. `darts_alphas/vit_base_cifar10.history.json`).
 
-The final printout lists, per block, the heads by importance and the min/max MLP-neuron weight. A max far above 1 (tens or more) means the weight has concentrated on a few neurons.
+After every epoch that trains the alphas, the script also prints an alphas summary, so their drift can be followed while training runs: per block, the heads by importance, the range of the head weights, and the min/max/std of the MLP-neuron weights, followed by the largest head and MLP weight over all blocks. The same summary is printed for the saved (best) alphas at the end. All weights average 1: values near 1 mean almost uniform importances, and a max far above 1 (tens or more) means the weight has concentrated on a few heads or neurons.
+
+`<output>.history.json` is rewritten after every epoch, so it can be read while the run is in progress (and survives an interrupted run). Each epoch entry holds `val_loss`, `val_acc` and `alphas`: one record per block with `head_ranking`, `head_weights` (the 12 head weights), `head_min/max/std` and `mlp_min/max/std`. For example, the largest MLP weight per epoch:
+
+```bash
+python -c "import json; h=json.load(open('darts_alphas/vit_base_cifar10.history.json')); [print(e['epoch'], '%.2f%%' % e['val_acc'], 'max MLP=%.2f' % max(b['mlp_max'] for b in e['alphas'])) for e in h['epochs']]"
+```
 
 ### 3. Phase 2 — search
 
