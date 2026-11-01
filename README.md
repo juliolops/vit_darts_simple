@@ -180,6 +180,27 @@ python run_darts_alphas.py --config_file config.yaml --epochs 1 --limit_data_val
 
 The alphas are written to `vit_alphas_path` from the config (or `--output`). `--limit_data_value` is the total of train + val images (0 = the whole split). This short run only checks the pipeline; use more images/epochs for a meaningful ranking. The run is seeded (`--seed`), so the same command gives the same alphas on the same device.
 
+A longer run, on the whole train/val split:
+
+```bash
+python run_darts_alphas.py --config_file config.yaml --epochs 10 --limit_data_value 0
+```
+
+#### Training stability
+
+`N · softmax(alphas)` is unbounded: once the alphas of a block drift apart, a few heads or MLP neurons can be amplified tens of times, and together with a high learning rate on the pretrained MLP this can make training diverge after a few stable epochs (loss spikes, validation accuracy collapsing). The script guards against it:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--lr_w` | `1e-4` | Learning rate of the MLP + classifier weights (1e-3 destroys the pretrained features) |
+| `--lr_alpha` | `3e-4` | Learning rate of the alphas |
+| `--grad_clip` | `5.0` | Max gradient norm of the weights and of the alphas, applied separately (`0` disables it) |
+| `--warmup_epochs` | `1` | First epochs train only the weights, with the alphas fixed (capped at `epochs - 1`, so at least one epoch learns the alphas) |
+
+After every epoch the model is scored on the **whole** validation split, and the alphas saved are those of the epoch with the best validation accuracy (among the epochs that updated the alphas), not the last one. The per-epoch loss/accuracy, the best epoch and the arguments are written to `<output>.history.json` (e.g. `darts_alphas/vit_base_cifar10.history.json`).
+
+The final printout lists, per block, the heads by importance and the min/max MLP-neuron weight. A max far above 1 (tens or more) means the weight has concentrated on a few neurons.
+
 ### 3. Phase 2 — search
 
 ```bash
