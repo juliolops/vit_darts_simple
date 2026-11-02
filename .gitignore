@@ -27,3 +27,7 @@ cache/
 .cache/
 env.sh
 setup_*.sh
+
+# Logs and local backups
+*.log
+*.tar.gz
