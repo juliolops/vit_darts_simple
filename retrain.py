@@ -14,6 +14,8 @@ import argparse
 import json
 import os
 import pickle
+import sys
+import time
 
 import torch
 import torch.nn as nn
@@ -21,7 +23,7 @@ from torch.utils.data import DataLoader
 
 from core.config import load_config
 from core.data import build_loaders, build_test_dataset
-from core.training import _run_epoch, build_candidate, count_flops, make_optimizer
+from core.training import _format_seconds, build_candidate, count_flops, make_optimizer, run_epoch_stats
 from core.utils import resolve_device, set_global_seeds
 
 
@@ -39,6 +41,8 @@ def find_chromosome(history_path: str, candidate_id: str):
 
 
 def main(args):
+    # Line-buffered output, so progress shows up immediately when piped to `tee`.
+    sys.stdout.reconfigure(line_buffering=True)
     set_global_seeds(args.seed)
     params = load_config({'config_file': args.config_file, 'seed': args.seed,
                           'data_path': args.data_path,
@@ -65,15 +69,28 @@ def main(args):
     optimizer = make_optimizer(model, params)
     criterion = nn.CrossEntropyLoss()
 
-    val_curve, best_val, best_epoch, best_state = [], -1.0, 0, None
+    history, best_val, best_epoch, best_state = [], -1.0, 0, None
+    run_start = time.perf_counter()
     for epoch in range(1, args.epochs + 1):
-        train_acc = _run_epoch(model, train_loader, device, criterion, optimizer)
-        val_acc = _run_epoch(model, val_loader, device, criterion)
-        val_curve.append(val_acc)
-        if val_acc > best_val:
-            best_val, best_epoch = val_acc, epoch
+        epoch_start = time.perf_counter()
+        print(f"\n[retrain] --- epoch {epoch}/{args.epochs} ---", flush=True)
+        train = run_epoch_stats(model, train_loader, device, criterion, optimizer,
+                                log_every=args.log_every, desc=f"[retrain] epoch {epoch} treino ")
+        val = run_epoch_stats(model, val_loader, device, criterion)
+        history.append({'epoch': epoch, 'train': train, 'val': val})
+        improved = val['acc1'] > best_val
+        if improved:
+            best_val, best_epoch = val['acc1'], epoch
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-        print(f"[retrain] epoch {epoch}/{args.epochs}: train={train_acc:.2f}% val={val_acc:.2f}%")
+        done = time.perf_counter() - run_start
+        eta = done / epoch * (args.epochs - epoch)
+        print(f"[retrain] epoch {epoch}/{args.epochs}: "
+              f"treino loss={train['loss']:.4f} acc@1={train['acc1']:.2f}% acc@5={train['acc5']:.2f}% | "
+              f"val loss={val['loss']:.4f} acc@1={val['acc1']:.2f}% acc@5={val['acc5']:.2f}%"
+              f"{'  <- melhor até agora' if improved else ''}", flush=True)
+        print(f"[retrain] progresso: {epoch}/{args.epochs} épocas ({100 * epoch / args.epochs:.0f}%) | "
+              f"época em {_format_seconds(time.perf_counter() - epoch_start)} | "
+              f"total {_format_seconds(done)} | faltam ~{_format_seconds(eta)}", flush=True)
 
     # Final evaluation: the first and only time the test set is loaded.
     model.load_state_dict(best_state)
@@ -81,7 +98,8 @@ def main(args):
                              batch_size=params['eval_batch_size'], shuffle=False,
                              num_workers=params['num_workers'],
                              pin_memory=device.startswith('cuda'))
-    test_acc = _run_epoch(model, test_loader, device, criterion)
+    test = run_epoch_stats(model, test_loader, device, criterion)
+    test_acc = test['acc1']
 
     results = {
         'id': name,
@@ -91,10 +109,15 @@ def main(args):
                                                for k in ('best_accuracy', 'total_flops')},
         'epochs': args.epochs,
         'train_images': len(train_loader.dataset),
-        'val_accuracy_per_epoch': val_curve,
+        'val_accuracy_per_epoch': [h['val']['acc1'] for h in history],
+        'history': history,
         'best_epoch': best_epoch,
         'best_val_accuracy': best_val,
+        'best_val_top5': history[best_epoch - 1]['val']['acc5'],
         'test_accuracy': test_acc,
+        'test_top5': test['acc5'],
+        'test_loss': test['loss'],
+        'train_time_seconds': time.perf_counter() - run_start,
         'test_images': len(test_loader.dataset),
         'total_flops': count_flops(model, device),
         'total_params': sum(p.numel() for p in model.parameters()),
@@ -108,7 +131,7 @@ def main(args):
     torch.save(best_state, os.path.join(out_dir, 'model_state.pt'))
 
     print(f"\n[retrain] {name}: best epoch {best_epoch} (val {best_val:.2f}%) -> "
-          f"TEST {test_acc:.2f}% on {len(test_loader.dataset)} images | "
+          f"TEST acc@1 {test_acc:.2f}% acc@5 {test['acc5']:.2f}% on {len(test_loader.dataset)} images | "
           f"FLOPs {results['total_flops'] / 1e9:.2f} G | params {results['total_params'] / 1e6:.1f} M")
     print(f"[retrain] saved to {out_dir}")
 
@@ -129,6 +152,8 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default=None)
     parser.add_argument('--output_dir', type=str, default='retrain_results')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--log_every', type=int, default=100,
+                        help='Print training progress every N batches (0 = only per epoch).')
     parsed = parser.parse_args()
     if parsed.id is not None and parsed.pareto_history is None:
         parser.error('--pareto_history is required with --id')
