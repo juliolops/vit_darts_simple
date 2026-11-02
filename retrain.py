@@ -26,14 +26,16 @@ from core.utils import resolve_device, set_global_seeds
 
 
 def find_chromosome(history_path: str, candidate_id: str):
-    """Chromosome of ``candidate_id`` in the latest generation whose front holds it."""
+    """Chromosome of ``candidate_id``: looked up in the Pareto fronts (latest generation
+    first), then among all evaluated candidates (histories that store them)."""
     with open(history_path, 'rb') as f:
         history = pickle.load(f)
-    for generation in sorted(history, reverse=True):
-        for point in history[generation]['front']:
-            if point['id'] == candidate_id:
-                return point['chromosome'], point
-    raise KeyError(f"Candidate '{candidate_id}' is not in any Pareto front of {history_path}.")
+    for key in ('front', 'evaluated'):
+        for generation in sorted(history, reverse=True):
+            for point in history[generation].get(key, []):
+                if point['id'] == candidate_id:
+                    return point['chromosome'], point
+    raise KeyError(f"Candidate '{candidate_id}' is not in {history_path}.")
 
 
 def main(args):
