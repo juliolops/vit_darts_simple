@@ -1,4 +1,6 @@
 """Train and score one candidate: accuracy (maximize) and FLOPs (minimize)."""
+import time
+
 import torch
 import torch.nn as nn
 
@@ -35,24 +37,56 @@ def count_flops(model: nn.Module, device: str) -> int:
     return int(total)
 
 
-def _run_epoch(model, loader, device, criterion, optimizer=None) -> float:
-    """One pass over ``loader``; trains when ``optimizer`` is given. Returns accuracy (%)."""
+def _format_seconds(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+
+def run_epoch_stats(model, loader, device, criterion, optimizer=None,
+                    log_every: int = 0, desc: str = '') -> dict:
+    """One pass over ``loader``; trains when ``optimizer`` is given.
+
+    Returns ``{'loss', 'acc1', 'acc5'}`` (accuracies in %, top-5 = the label is
+    among the 5 highest scores). With ``log_every > 0``, prints the running
+    loss/top-1/top-5, the elapsed time and an ETA every ``log_every`` batches.
+    """
     training = optimizer is not None
     model.train(training)
-    correct = total = 0
+    correct1 = correct5 = total = 0
+    loss_sum = 0.0
+    n_batches = len(loader)
+    start = time.perf_counter()
     with torch.enable_grad() if training else torch.no_grad():
-        for inputs, labels in loader:
+        for step, (inputs, labels) in enumerate(loader, start=1):
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
+            loss = criterion(outputs, labels)
             if training:
-                loss = criterion(outputs, labels)
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-            correct += (outputs.argmax(dim=1) == labels).sum().item()
+            top5 = outputs.topk(min(5, outputs.size(1)), dim=1).indices
+            correct1 += (top5[:, 0] == labels).sum().item()
+            correct5 += (top5 == labels.view(-1, 1)).any(dim=1).sum().item()
+            loss_sum += loss.item() * labels.size(0)
             total += labels.size(0)
-    return 100 * correct / total if total else 0.0
+            if log_every and (step % log_every == 0 or step == n_batches):
+                elapsed = time.perf_counter() - start
+                eta = elapsed / step * (n_batches - step)
+                print(f"{desc}step {step}/{n_batches} ({100 * step / n_batches:.0f}%) | "
+                      f"loss {loss_sum / total:.4f} acc@1 {100 * correct1 / total:.2f}% "
+                      f"acc@5 {100 * correct5 / total:.2f}% | {_format_seconds(elapsed)} "
+                      f"(faltam ~{_format_seconds(eta)})", flush=True)
+    if not total:
+        return {'loss': 0.0, 'acc1': 0.0, 'acc5': 0.0}
+    return {'loss': loss_sum / total, 'acc1': 100 * correct1 / total, 'acc5': 100 * correct5 / total}
+
+
+def _run_epoch(model, loader, device, criterion, optimizer=None) -> float:
+    """One pass over ``loader``; trains when ``optimizer`` is given. Returns top-1 accuracy (%)."""
+    return run_epoch_stats(model, loader, device, criterion, optimizer)['acc1']
 
 
 def build_candidate(percentages, params: dict, device: str) -> nn.Module:

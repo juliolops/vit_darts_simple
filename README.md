@@ -274,7 +274,9 @@ python retrain.py --config_file config.yaml \
     --pareto_history experiment_vit/teste1/pareto_history.pkl --id 1_3 --epochs 10
 ```
 
-The candidate trains its MLPs + classifier on the train split (`--limit_data_value 0` = all 45,000 images), the epoch with the best validation accuracy is kept, and only then is the test set loaded and evaluated once. `retrain_results/<id>/results.json` holds the chromosome, the validation curve, the **test accuracy**, FLOPs and parameters; `model_state.pt` holds the weights (rebuild the pruned architecture with the same chromosome and alphas file to load them). A chromosome can also be given directly with `--chromosome 3 5 7 ...`.
+The candidate trains its MLPs + classifier on the train split (`--limit_data_value 0` = all 45,000 images), the epoch with the best validation accuracy is kept, and only then is the test set loaded and evaluated once. While training, a progress line is printed every `--log_every` batches (default 100): the step, the running loss, top-1 (`acc@1`) and top-5 (`acc@5`) accuracy, the elapsed time and an estimate of the time left in the epoch. After each epoch come the train and validation loss/acc@1/acc@5 and the overall progress with the time left for the run. Top-5 counts an image as correct when the true class is among the model's 5 highest scores.
+
+`retrain_results/<id>/results.json` holds the chromosome, the per-epoch history (train and validation loss, acc@1, acc@5), the **test accuracy** (`test_accuracy` = top-1, `test_top5`), FLOPs, parameters and the training time; `model_state.pt` holds the weights (rebuild the pruned architecture with the same chromosome and alphas file to load them). A chromosome can also be given directly with `--chromosome 3 5 7 ...`.
 
 ## License
 
