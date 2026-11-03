@@ -1,7 +1,7 @@
-"""Datasets for the pretrained ViT, at 224x224: CIFAR-10 or ImageNet.
+"""Datasets for the pretrained ViT, at 224x224: CIFAR-10, CIFAR-100 or ImageNet.
 
-Pick the dataset with ``dataset`` in the config (``cifar10``, the default, or
-``imagenet``). Data protocol, the same for every phase and both datasets:
+Pick the dataset with ``dataset`` in the config: ``cifar10`` (the default),
+``cifar100`` or ``imagenet``. Data protocol, the same for every phase and dataset:
 
 - **train**: a stratified ``train_split`` share of the dataset's *train* split
   (``split_seed``). DARTS trains the MLP + classifier weights on it, the search
@@ -10,9 +10,9 @@ Pick the dataset with ``dataset`` in the config (``cifar10``, the default, or
   search scores candidate accuracy on it, and ``retrain.py`` picks the best
   epoch on it.
 - **test**: a held-out split, reachable only through ``build_test_dataset``,
-  which only ``retrain.py`` calls, once, after training. For CIFAR-10 it is the
-  official test set; for ImageNet, whose test labels are not public, it is the
-  official validation set (50,000 images), as is standard practice.
+  which only ``retrain.py`` calls, once, after training. For CIFAR-10 and
+  CIFAR-100 it is the official test set; for ImageNet, whose test labels are not
+  public, it is the official validation set (50,000 images), as is standard practice.
 
 ImageNet is read from folders (it cannot be downloaded automatically)::
 
@@ -35,7 +35,9 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision.transforms import Compose, Normalize, Resize, ToTensor
 
-DATASETS = ('cifar10', 'imagenet')
+DATASETS = ('cifar10', 'cifar100', 'imagenet')
+# torchvision class and number of classes of each CIFAR variant (downloaded automatically).
+_CIFAR = {'cifar10': (tvd.CIFAR10, 10), 'cifar100': (tvd.CIFAR100, 100)}
 INPUT_SHAPE = (3, 224, 224)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -74,7 +76,7 @@ def dataset_name(params: dict) -> str:
     return params.get('dataset', 'cifar10')
 
 
-# --------------------------------------------------------------------------- CIFAR-10
+# --------------------------------------------------------------------------- CIFAR-10 / CIFAR-100
 
 def _cifar_transform():
     return Compose([Resize(INPUT_SHAPE[1:]), ToTensor(), Normalize(IMAGENET_MEAN, IMAGENET_STD)])
@@ -159,7 +161,7 @@ def num_classes(params: dict) -> int:
     """Number of outputs of the classifier for the configured dataset."""
     if dataset_name(params) == 'imagenet':
         return len(_imagenet_selection(params)[1])
-    return 10
+    return _CIFAR[dataset_name(params)][1]
 
 
 def head_classes(params: dict):
@@ -182,8 +184,8 @@ def build_datasets(params: dict):
     Never touches the test set.
     """
     name = dataset_name(params)
-    if name == 'cifar10':
-        raw = tvd.CIFAR10(params['data_path'], train=True, download=True, transform=None)
+    if name in _CIFAR:
+        raw = _CIFAR[name][0](params['data_path'], train=True, download=True, transform=None)
         tfm = _cifar_transform()
     elif name == 'imagenet':
         raw = _ImageList(_imagenet_samples(params, 'train'))
@@ -210,7 +212,7 @@ def build_datasets(params: dict):
 
 
 def build_test_dataset(params: dict):
-    """The held-out test set: CIFAR-10's official test set (10,000 images) or
+    """The held-out test set: CIFAR-10's or CIFAR-100's official test set (10,000 images) or
     ImageNet's official validation set (50,000 images, fewer with ``imagenet_classes``).
 
     Reserved for the final evaluation in ``retrain.py``: no other phase may call this.
@@ -218,7 +220,8 @@ def build_test_dataset(params: dict):
     if dataset_name(params) == 'imagenet':
         return _TransformWrapper(_ImageList(_imagenet_samples(params, 'val')),
                                  _imagenet_transform(params))
-    return tvd.CIFAR10(params['data_path'], train=False, download=True, transform=_cifar_transform())
+    cifar_cls = _CIFAR[dataset_name(params)][0]
+    return cifar_cls(params['data_path'], train=False, download=True, transform=_cifar_transform())
 
 
 def build_loaders(params: dict, device: str):
