@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import timm
+
+from core.vit import create_vit
 
 
 def normalized_weights(alphas):
@@ -79,13 +80,15 @@ class DartsMlpWrapper(nn.Module):
         return x
 
 
-def build_darts_vit(model_name='vit_base_patch16_224', num_classes=1000):
+def build_darts_vit(model_name='vit_base_patch16_224', num_classes=1000, head_classes=None):
     """Pretrained ViT with DARTS alphas on every attention head and MLP hidden neuron.
 
     Only the MLP weights and the classifier head are trained (``weight_params``);
     the attention layers, embeddings and LayerNorms keep their pretrained weights.
+    ``head_classes`` keeps those outputs of the pretrained ImageNet classifier
+    (ImageNet runs); otherwise the classifier is new (CIFAR-10).
     """
-    model = timm.create_model(model_name, pretrained=True, num_classes=num_classes)
+    model = create_vit(model_name, True, num_classes, head_classes)
     for param in model.parameters():
         param.requires_grad = False
 

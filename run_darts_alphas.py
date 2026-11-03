@@ -31,7 +31,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from core.config import load_config
-from core.data import build_datasets
+from core.data import build_datasets, dataset_name, head_classes, num_classes
 from core.utils import resolve_device, set_global_seeds
 from core.vit import extract_alphas, save_alphas
 from vit_transformer_search import build_darts_vit, evaluate, train_darts_epoch
@@ -85,17 +85,18 @@ def main(args):
     device = resolve_device()
     print(f"[darts] device: {device}")
 
-    train_ds, val_ds = build_datasets(params['data_path'], params['train_split'],
-                                      params['split_seed'], params['limit_data_value'])
+    train_ds, val_ds = build_datasets(params)
     common = dict(batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
                   pin_memory=device.startswith('cuda'),
                   generator=torch.Generator().manual_seed(args.seed))
     train_loader = DataLoader(train_ds, **common)
     val_loader = DataLoader(val_ds, **common)
-    print(f"[darts] train={len(train_ds)} val={len(val_ds)} batch={args.batch_size}")
+    print(f"[darts] dataset={dataset_name(params)} classes={num_classes(params)} "
+          f"train={len(train_ds)} val={len(val_ds)} batch={args.batch_size}")
 
     model, weight_params, alpha_params = build_darts_vit(
-        model_name=params['vit_model_name'], num_classes=10)
+        model_name=params['vit_model_name'], num_classes=num_classes(params),
+        head_classes=head_classes(params))
     model = model.to(device)
 
     optimizer_w = torch.optim.AdamW(weight_params, lr=args.lr_w, weight_decay=1e-4)

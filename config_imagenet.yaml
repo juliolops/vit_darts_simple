@@ -1,0 +1,42 @@
+# Same search as config.yaml, on ImageNet instead of CIFAR-10.
+#
+# ImageNet is not downloaded automatically: put it in class folders under data_path
+#   <data_path>/train/<class>/*.JPEG   (official train set, 1000 class folders)
+#   <data_path>/val/<class>/*.JPEG     (official validation set, used here as the TEST set)
+# with folders sorting in ImageNet-1k order (WordNet ids n01440764, ... or 0000..0999).
+#
+# The pretrained ViT already classifies ImageNet, so its 1000-way classifier is kept
+# (restricted to the chosen classes) instead of starting from a random one.
+
+dataset: imagenet
+imagenet_classes: 100        # 0 = all 1000 classes; N > 0 = N classes spread evenly
+imagenet_pretrained_head: true
+
+num_blocks: 12
+prune_mlp: true          # also prune the MLP of every block (24 genes)
+percentages: [20, 30, 40, 50, 60, 70, 80, 90]   # used by head and MLP genes
+
+# --- ViT ---
+vit_model_name: vit_base_patch16_224
+vit_pretrained: true
+vit_alphas_path: darts_alphas/vit_base_imagenet100.json   # one alphas file per dataset
+
+# --- Candidate training (MLPs + classifier, AdamW) ---
+batch_size: 32
+eval_batch_size: 64
+max_epochs: 3
+epochs_to_eval: 2        # accuracy = mean val accuracy over the last 2 epochs
+learning_rate: 1.0e-4       # classifier: pretrained here, so a small rate (1e-3 on CIFAR-10)
+mlp_learning_rate: 1.0e-4   # pretrained MLPs
+weight_decay: 1.0e-4
+
+# --- ImageNet (the model's own resize/crop/normalization, read from timm) ---
+# The official train set is split into train/val with these values in every phase.
+data_path: /data-ext/juliolopes/datasets/imagenet
+train_split: 0.95        # 100 classes: ~122k train / ~6.4k val images
+split_seed: 2025
+loader_seed: 777
+limit_data_value: 10000  # search: images per candidate (train + val), class-balanced
+num_workers: 8           # JPEG decoding needs more workers than CIFAR-10
+
+threads: 3               # candidates evaluated concurrently, one per GPU
