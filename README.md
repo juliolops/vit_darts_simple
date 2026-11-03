@@ -1,4 +1,4 @@
-# ViT-NAS: Multi-Objective ViT Pruning on CIFAR-10 and ImageNet
+# ViT-NAS: Multi-Objective ViT Pruning on CIFAR-10, CIFAR-100 and ImageNet
 
 Searches for **pruned Vision Transformers** on **CIFAR-10**, trading **accuracy** (maximize) against **FLOPs** (minimize), in two phases:
 
@@ -45,13 +45,14 @@ The test set is only reachable through `core.data.build_test_dataset`, which onl
     └── utils.py               # Seeding, logging, device selection
 ```
 
-## Datasets: CIFAR-10 or ImageNet
+## Datasets: CIFAR-10, CIFAR-100 or ImageNet
 
 The dataset is chosen in the config with `dataset`:
 
 | Config | Dataset | Classifier | Test set |
 |---|---|---|---|
 | `config.yaml`, `config_mlp.yaml` | `cifar10` (default; downloaded automatically) | new, 10 classes | official test set (10,000) |
+| `config_cifar100.yaml` | `cifar100` (downloaded automatically) | new, 100 classes | official test set (10,000) |
 | `config_imagenet.yaml` | `imagenet` (must be on disk) | the pretrained ImageNet classifier, kept | official validation set (50,000), since ImageNet's test labels are not public |
 
 In both cases the official *train* split is divided into train/val (`train_split`, `split_seed`), and the test set is read only by `retrain.py`, once.
@@ -72,7 +73,7 @@ ImageNet-specific keys:
 | `imagenet_classes` | `0` | `0` = all 1000 classes; `N > 0` = `N` classes spread evenly over the 1000, in every split, for quicker runs |
 | `imagenet_pretrained_head` | `true` | Keep the pretrained classifier (restricted to the chosen classes). Only applies with exactly 1000 class folders in ImageNet-1k order; otherwise a new classifier is trained |
 
-ImageNet images get the pretrained model's own preprocessing (resize, center crop, normalization, read from timm). CIFAR-10 keeps its 224x224 resize with ImageNet statistics. Use one alphas file per dataset (`vit_alphas_path`), since DARTS learns them on that dataset's data:
+ImageNet images get the pretrained model's own preprocessing (resize, center crop, normalization, read from timm). CIFAR-10 and CIFAR-100 keep the 224x224 resize with ImageNet statistics. Use one alphas file per dataset (`vit_alphas_path`), since DARTS learns them on that dataset's data:
 
 ```bash
 python run_darts_alphas.py --config_file config_imagenet.yaml --epochs 3 --num_workers 8
@@ -81,6 +82,16 @@ python run_all_evolution.py --config_file config_imagenet.yaml --experiment_path
 python retrain.py --config_file config_imagenet.yaml \
     --pareto_history experiment_vit/imagenet1/pareto_history.pkl --id <id> --epochs 10
 ```
+
+CIFAR-100 runs exactly like CIFAR-10, with its own config and alphas file:
+
+```bash
+python run_darts_alphas.py --config_file config_cifar100.yaml --epochs 10 --limit_data_value 0
+python run_all_evolution.py --config_file config_cifar100.yaml --experiment_path experiment_vit/cifar100_1 \
+    --population_size 20 --num_generations 20 --threads 3
+```
+
+With 100 classes, `limit_data_value` must be larger than on CIFAR-10 for the same images per class (`config_cifar100.yaml` uses 10,000: 90 train + 10 val images per class).
 
 ImageNet is about 28 times larger than CIFAR-10, so a full-data DARTS epoch takes hours; start with `imagenet_classes: 100` (the default in `config_imagenet.yaml`).
 

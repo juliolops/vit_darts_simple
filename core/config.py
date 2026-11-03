@@ -30,8 +30,9 @@ def load_config(args: dict) -> dict:
 
     for key, default in OPTIONAL.items():
         params.setdefault(key, default)
-    if params['dataset'] not in ('cifar10', 'imagenet'):
-        raise ValueError(f"dataset must be 'cifar10' or 'imagenet', got {params['dataset']!r}.")
+    if params['dataset'] not in ('cifar10', 'cifar100', 'imagenet'):
+        raise ValueError("dataset must be 'cifar10', 'cifar100' or 'imagenet', "
+                         f"got {params['dataset']!r}.")
     if not isinstance(params['imagenet_classes'], int) or params['imagenet_classes'] < 0:
         raise ValueError("imagenet_classes must be an int >= 0 (0 = all classes).")
 
