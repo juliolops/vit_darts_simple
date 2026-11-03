@@ -42,4 +42,10 @@ limit_data_value: 10000  # search: images per candidate (train + val), class-bal
                          # 100 classes -> 90 train + 10 val images per class
 num_workers: 2
 
+# --- FLOPs objective ---
+# hooks:   original counter, Linear/Conv layers only (ViT-Base = 33.7 G); results so far use it
+# pytorch: torch.utils.flop_counter, also counts the attention products (ViT-Base ~ 35.1 G)
+# Both count 2 FLOPs per multiply-add; compare searches only within one counter.
+flops_counter: hooks
+
 threads: 3               # candidates evaluated concurrently, one per GPU (1 on Apple MPS)

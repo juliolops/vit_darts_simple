@@ -95,6 +95,19 @@ With 100 classes, `limit_data_value` must be larger than on CIFAR-10 for the sam
 
 ImageNet is about 28 times larger than CIFAR-10, so a full-data DARTS epoch takes hours; start with `imagenet_classes: 100` (the default in `config_imagenet.yaml`).
 
+## Counting FLOPs
+
+The FLOPs objective (and the FLOPs reported by `retrain.py`) is counted for one 224×224 image, at 2 FLOPs per multiply-add. Choose the counter with `flops_counter` in the config:
+
+| `flops_counter` | What it counts | ViT-Base |
+|---|---|---|
+| `hooks` (default) | The project's original counter: `Linear` and `Conv2d` layers, via forward hooks. Leaves out the attention matrix products (q·kᵀ, attention·v) | 33.7 G |
+| `pytorch` | PyTorch's [`FlopCounterMode`](https://pytorch.org/docs/stable/generated/torch.utils.flop_counter.FlopCounterMode.html): every matrix multiplication and convolution, including the attention products | ~35.1 G |
+
+Neither counts element-wise operations (softmax, GELU, LayerNorm, residual adds). Many ViT papers report multiply-adds (MACs) and call them FLOPs (e.g. 17.6 G for ViT-Base/DeiT-B): divide the `pytorch` count by 2 to compare. Searches are only comparable within one counter, so `hooks` stays the default for continuity with earlier results. `retrain.py` writes both counts to `results.json` (`flops_hooks`, `flops_pytorch`), whichever one the config selects for `total_flops`.
+
+FLOPs do not measure speed: latency also depends on the GPU, memory traffic and batch size.
+
 ## Running a quick test
 
 ### 1. Environment
