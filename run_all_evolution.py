@@ -7,7 +7,7 @@
 import argparse
 import os
 
-from algorithms.nsga import run_search
+from algorithms.nsga import CHECKPOINT, load_checkpoint, run_search
 from core.config import load_config
 from core.evaluation import EvalPopulation
 from core.utils import init_log, set_global_seeds
@@ -22,6 +22,14 @@ def main(args: dict):
     params = load_config(args)
     logger.info(f"Config: {params}")
 
+    has_checkpoint = load_checkpoint(args['experiment_path']) is not None
+    if has_checkpoint and not args['resume']:
+        raise SystemExit(
+            f"{args['experiment_path']} already holds a search ({CHECKPOINT}). Add --resume to "
+            f"continue it, or choose another --experiment_path to start a new one.")
+    if args['resume'] and not has_checkpoint:
+        logger.info(f"--resume: no checkpoint in {args['experiment_path']}, starting a new search")
+
     archive = run_search(
         args['algorithm'],
         EvalPopulation(params, log_level=args['log_level']),
@@ -35,6 +43,10 @@ def main(args: dict):
         seed=args['seed'],
         log_file=os.path.join(args['experiment_path'], 'log.txt'),
         log_level=args['log_level'],
+        resume=args['resume'],
+        run_info={'config_file': args['config_file'],
+                  **{k: params[k] for k in ('dataset', 'flops_counter', 'limit_data_value',
+                                            'vit_alphas_path', 'prune_mlp')}},
     )
     logger.info("Evolution finished.")
 
@@ -57,6 +69,9 @@ if __name__ == '__main__':
     parser.add_argument('--mutation_rate', type=float, default=None,
                         help='Per-gene mutation probability (default: 1 / number of genes).')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--resume', action='store_true',
+                        help='Continue the search saved in --experiment_path from its last '
+                             'completed generation (same command otherwise).')
     parser.add_argument('--log_level', choices=['NONE', 'INFO', 'DEBUG'], default='INFO')
     # Optional overrides of the config file.
     parser.add_argument('--data_path', type=str, default=None)
