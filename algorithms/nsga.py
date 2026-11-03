@@ -15,10 +15,17 @@ per generation: the global archive of every non-dominated candidate seen so far
 fewest FLOPs on ties) and the best candidate of the whole search so far
 (``best_so_far``). The same data, readable without Python, goes to
 ``<experiment_path>/generations.json``.
+
+The full search state (the pymoo algorithm with its population, the archive,
+the history and the random number generators) is checkpointed after each
+generation to ``<experiment_path>/checkpoint.pkl``, so an interrupted search
+resumes from the next generation with ``resume=True`` (``--resume``) and gives
+the same result as an uninterrupted run.
 """
 import json
 import os
 import pickle
+import random
 
 import numpy as np
 from pymoo.algorithms.moo.nsga2 import NSGA2
@@ -73,21 +80,76 @@ def build_algorithm(name, population_size, crossover_rate, mutation_rate):
     raise ValueError(f"Unknown algorithm {name!r}; expected 'nsga2' or 'nsga3'.")
 
 
+CHECKPOINT = 'checkpoint.pkl'
+
+
+def _atomic_pickle(obj, path):
+    """Write ``obj`` to ``path`` so that a crash mid-write never leaves a broken file."""
+    tmp = path + '.tmp'
+    with open(tmp, 'wb') as f:
+        pickle.dump(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def load_checkpoint(experiment_path):
+    """The saved search state, or ``None`` when the experiment has no checkpoint."""
+    path = os.path.join(experiment_path, CHECKPOINT)
+    if not os.path.isfile(path):
+        return None
+    with open(path, 'rb') as f:
+        return pickle.load(f)
+
+
 def run_search(algorithm_name, eval_func, experiment_path, percentages, population_size,
                num_generations, num_genes, crossover_rate, mutation_rate, seed,
-               log_file, log_level):
-    """Run the search and return the final archive as ``[(id, chromosome, objectives)]``."""
+               log_file, log_level, resume=False, run_info=None):
+    """Run the search and return the final archive as ``[(id, chromosome, objectives)]``.
+
+    With ``resume=True`` and a checkpoint in ``experiment_path``, the search continues
+    from the generation after the last one completed. ``run_info`` (config file,
+    dataset, FLOPs counter...) is stored in the checkpoint and must match on resume,
+    so a search is never continued with different settings. ``num_generations`` may
+    be raised on resume to extend a finished search.
+    """
     logger = init_log(log_level, name=__name__, file_path=log_file)
+    settings = {'algorithm': algorithm_name, 'population_size': population_size,
+                'num_genes': num_genes, 'percentages': list(percentages),
+                'crossover_rate': crossover_rate, 'mutation_rate': mutation_rate,
+                'seed': seed, **(run_info or {})}
 
-    problem = Problem(n_var=num_genes, n_obj=len(OBJECTIVES),
-                      xl=0, xu=len(percentages) - 1, vtype=int)
-    algorithm = build_algorithm(algorithm_name, population_size, crossover_rate, mutation_rate)
-    algorithm.setup(problem, termination=('n_gen', num_generations), seed=seed)
+    state = load_checkpoint(experiment_path) if resume else None
+    if state is not None:
+        saved = state['settings']
+        changed = {k: (saved.get(k), v) for k, v in settings.items() if saved.get(k) != v}
+        if changed:
+            details = ', '.join(f"{k}: {a!r} -> {b!r}" for k, (a, b) in changed.items())
+            raise ValueError(f"Cannot resume {experiment_path}: settings differ from the "
+                             f"checkpoint ({details}). Use the same command, or a new "
+                             f"--experiment_path for a different search.")
+        algorithm = state['algorithm']
+        from pymoo.termination import get_termination
+        algorithm.termination = get_termination('n_gen', num_generations)
+        problem = algorithm.problem
+        archive_ids, archive_X, archive_F = state['archive']
+        history, best_so_far = state['history'], state['best_so_far']
+        generation = state['generation']
+        np.random.set_state(state['numpy_rng'])
+        random.setstate(state['python_rng'])
+        logger.info(f"Resuming {experiment_path} at generation {generation} "
+                    f"({generation} of {num_generations} already done)")
+    else:
+        problem = Problem(n_var=num_genes, n_obj=len(OBJECTIVES),
+                          xl=0, xu=len(percentages) - 1, vtype=int)
+        algorithm = build_algorithm(algorithm_name, population_size, crossover_rate,
+                                    mutation_rate)
+        algorithm.setup(problem, termination=('n_gen', num_generations), seed=seed)
+        archive_ids, archive_X, archive_F = [], np.empty((0, num_genes), int), np.empty((0, 2))
+        history = {}
+        best_so_far = None
+        generation = 0
 
-    archive_ids, archive_X, archive_F = [], np.empty((0, num_genes), int), np.empty((0, 2))
-    history = {}
-    best_so_far = None
-    generation = 0
     while algorithm.has_next():
         pop = algorithm.ask()
         X = pop.get('X').astype(int)
@@ -133,6 +195,14 @@ def run_search(algorithm_name, eval_func, experiment_path, percentages, populati
                     f"flops={best['total_flops']:.4g} percentages={best['percentages']} | "
                     f"best so far: {best_so_far['id']} acc={best_so_far['best_accuracy']:.4f}")
         generation += 1
+
+        # Everything needed to continue from the next generation.
+        _atomic_pickle({'settings': settings, 'generation': generation,
+                        'algorithm': algorithm,
+                        'archive': (archive_ids, archive_X, archive_F),
+                        'history': history, 'best_so_far': best_so_far,
+                        'numpy_rng': np.random.get_state(), 'python_rng': random.getstate()},
+                       os.path.join(experiment_path, CHECKPOINT))
 
     return [(cid, x.tolist(), {'best_accuracy': float(-f[0]), 'total_flops': float(f[1])})
             for cid, x, f in zip(archive_ids, archive_X, archive_F)]

@@ -295,6 +295,7 @@ Flags:
 | `--threads` | config | Candidates trained concurrently; one process each, one GPU per process on CUDA |
 | `--data_path`, `--limit_data_value` | config | Override `config.yaml` when given |
 | `--seed` | `42` | Seeds the GA and every candidate's training |
+| `--resume` | off | Continue the search saved in `--experiment_path` from its last completed generation |
 
 The evaluation picks CUDA, then Apple MPS, then CPU; keep `--threads 1` on MPS (a single shared GPU). Offspring that duplicate each other or the current population are discarded before training.
 
@@ -325,6 +326,16 @@ python -c "import pickle; h=pickle.load(open('experiment_vit/teste1/pareto_histo
 ```
 
 Since the files are rewritten after each generation, an interrupted search keeps every finished generation.
+
+**Resuming an interrupted search.** After each generation the full search state (the NSGA-II/III algorithm with its population, the Pareto archive, the history and the random number generators) is also saved to `<experiment_path>/checkpoint.pkl`. If the server stops, run the **same command** again with `--resume`:
+
+```bash
+python run_all_evolution.py --config_file config_cifar100_pytorch.yaml \
+    --experiment_path experiment_vit/cifar100_mlp1 --algorithm nsga2 \
+    --population_size 20 --num_generations 20 --threads 3 --seed 42 --resume
+```
+
+The search continues from the generation after the last completed one (a generation that was interrupted halfway is re-run from its start) and ends with the same result as an uninterrupted run. The settings saved in the checkpoint (algorithm, population size, genes, percentages, seed, config file, dataset, FLOPs counter, `limit_data_value`, alphas file) must match; otherwise `--resume` stops with an error naming what differs. `--num_generations` is the exception: raising it with `--resume` extends a finished search. Without `--resume`, an `--experiment_path` that already holds a checkpoint is refused, so a search is never overwritten by accident.
 
 The search accuracy is a proxy (few epochs, a subset, the validation set). Do not report it as the final result.
 
