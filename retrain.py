@@ -22,7 +22,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from core.config import load_config
-from core.data import build_loaders, build_test_dataset
+from core.data import build_loaders, build_test_dataset, dataset_name, num_classes
 from core.training import _format_seconds, build_candidate, count_flops, make_optimizer, run_epoch_stats
 from core.utils import resolve_device, set_global_seeds
 
@@ -62,7 +62,8 @@ def main(args):
     device = resolve_device()
     train_loader, val_loader = build_loaders(params, device)
     print(f"[retrain] {name}: percentages={percentages}")
-    print(f"[retrain] device={device} train={len(train_loader.dataset)} "
+    print(f"[retrain] dataset={dataset_name(params)} classes={num_classes(params)} "
+          f"device={device} train={len(train_loader.dataset)} "
           f"val={len(val_loader.dataset)} epochs={args.epochs}")
 
     model = build_candidate(percentages, params, device)
@@ -94,7 +95,7 @@ def main(args):
 
     # Final evaluation: the first and only time the test set is loaded.
     model.load_state_dict(best_state)
-    test_loader = DataLoader(build_test_dataset(params['data_path']),
+    test_loader = DataLoader(build_test_dataset(params),
                              batch_size=params['eval_batch_size'], shuffle=False,
                              num_workers=params['num_workers'],
                              pin_memory=device.startswith('cuda'))

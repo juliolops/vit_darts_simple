@@ -4,7 +4,7 @@ import time
 import torch
 import torch.nn as nn
 
-from core.data import INPUT_SHAPE, NUM_CLASSES
+from core.data import INPUT_SHAPE, head_classes, num_classes
 from core.vit import build_pruned_vit, load_alphas
 
 
@@ -94,10 +94,11 @@ def build_candidate(percentages, params: dict, device: str) -> nn.Module:
     followed by one MLP percentage per block when ``prune_mlp`` is on."""
     n_blocks = params['num_blocks']
     return build_pruned_vit(percentages[:n_blocks], load_alphas(params['vit_alphas_path']),
-                            NUM_CLASSES,
+                            num_classes(params),
                             mlp_percentages=percentages[n_blocks:] if params['prune_mlp'] else None,
                             model_name=params['vit_model_name'],
-                            pretrained=params['vit_pretrained']).to(device)
+                            pretrained=params['vit_pretrained'],
+                            head_classes=head_classes(params)).to(device)
 
 
 def make_optimizer(model: nn.Module, params: dict) -> torch.optim.Optimizer:

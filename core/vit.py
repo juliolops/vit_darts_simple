@@ -118,20 +118,51 @@ def prune_mlp_neurons(mlp: nn.Module, kept_neurons: Sequence[int]) -> None:
     mlp.fc1, mlp.fc2 = new_fc1, new_fc2
 
 
+def create_vit(model_name: str, pretrained: bool, num_classes: int,
+               head_classes: Sequence[int] = None) -> nn.Module:
+    """A timm ViT with a ``num_classes`` classifier.
+
+    With ``head_classes`` (ImageNet-1k class indices), the pretrained ImageNet
+    classifier is kept, restricted to those outputs in that order, so an
+    ImageNet run starts from the model's own predictions. Without it, the
+    classifier is new and randomly initialized (CIFAR-10).
+    """
+    import timm
+
+    if head_classes is None:
+        return timm.create_model(model_name, pretrained=pretrained, num_classes=num_classes)
+
+    model = timm.create_model(model_name, pretrained=pretrained)
+    old_head = model.get_classifier()
+    keep = torch.as_tensor(list(head_classes), dtype=torch.long)
+    if len(keep) != num_classes or int(keep.max()) >= old_head.out_features:
+        raise ValueError(f"head_classes ({len(keep)} classes, max {int(keep.max())}) does not fit "
+                         f"num_classes={num_classes} and a {old_head.out_features}-way classifier.")
+    weight = old_head.weight.detach()[keep].clone()
+    bias = old_head.bias.detach()[keep].clone() if old_head.bias is not None else None
+    model.reset_classifier(num_classes)
+    new_head = model.get_classifier()
+    with torch.no_grad():
+        new_head.weight.copy_(weight)
+        if bias is not None and new_head.bias is not None:
+            new_head.bias.copy_(bias)
+    return model
+
+
 def build_pruned_vit(head_percentages: List[int], alphas: Alphas, num_classes: int,
                      mlp_percentages: List[int] = None,
                      model_name: str = 'vit_base_patch16_224',
-                     pretrained: bool = True) -> nn.Module:
+                     pretrained: bool = True, head_classes: Sequence[int] = None) -> nn.Module:
     """Build a ViT with block ``i`` keeping ``head_percentages[i]`` % of its heads and,
     if ``mlp_percentages`` is given, ``mlp_percentages[i]`` % of its MLP neurons.
+    ``head_classes`` keeps those outputs of the pretrained ImageNet classifier
+    (see ``create_vit``); otherwise the classifier is new.
 
     Only the MLPs and the classifier are trainable. The attention layers, patch
     embedding, positional embedding and LayerNorms keep their pretrained weights
     frozen, as in the DARTS phase.
     """
-    import timm
-
-    model = timm.create_model(model_name, pretrained=pretrained, num_classes=num_classes)
+    model = create_vit(model_name, pretrained, num_classes, head_classes)
     n_blocks = len(model.blocks)
     for name, genes in (('head', head_percentages), ('MLP', mlp_percentages)):
         if genes is not None and len(genes) != n_blocks:

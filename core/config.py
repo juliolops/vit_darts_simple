@@ -10,6 +10,9 @@ REQUIRED = {
     'limit_data_value': int, 'num_workers': int, 'threads': int,
 }
 
+# Optional keys and their defaults (older configs without them run on CIFAR-10).
+OPTIONAL = {'dataset': 'cifar10', 'imagenet_classes': 0, 'imagenet_pretrained_head': True}
+
 # CLI flags that, when given, replace the config value.
 OVERRIDES = ('data_path', 'limit_data_value', 'threads')
 
@@ -24,6 +27,13 @@ def load_config(args: dict) -> dict:
         if not isinstance(params[key], expected):
             raise TypeError(f"'{key}' should be {expected.__name__} but is "
                             f"{type(params[key]).__name__}.")
+
+    for key, default in OPTIONAL.items():
+        params.setdefault(key, default)
+    if params['dataset'] not in ('cifar10', 'imagenet'):
+        raise ValueError(f"dataset must be 'cifar10' or 'imagenet', got {params['dataset']!r}.")
+    if not isinstance(params['imagenet_classes'], int) or params['imagenet_classes'] < 0:
+        raise ValueError("imagenet_classes must be an int >= 0 (0 = all classes).")
 
     for percent in params['percentages']:
         if not isinstance(percent, int) or not 0 < percent <= 100:
