@@ -120,7 +120,11 @@ def main(args):
         'test_loss': test['loss'],
         'train_time_seconds': time.perf_counter() - run_start,
         'test_images': len(test_loader.dataset),
-        'total_flops': count_flops(model, device),
+        'total_flops': count_flops(model, device, params['flops_counter']),
+        'flops_counter': params['flops_counter'],
+        # Both counts, so results stay comparable with searches run with either method.
+        'flops_hooks': count_flops(model, device, 'hooks'),
+        'flops_pytorch': count_flops(model, device, 'pytorch'),
         'total_params': sum(p.numel() for p in model.parameters()),
         'config_file': args.config_file,
         'seed': args.seed,
@@ -133,7 +137,11 @@ def main(args):
 
     print(f"\n[retrain] {name}: best epoch {best_epoch} (val {best_val:.2f}%) -> "
           f"TEST acc@1 {test_acc:.2f}% acc@5 {test['acc5']:.2f}% on {len(test_loader.dataset)} images | "
-          f"FLOPs {results['total_flops'] / 1e9:.2f} G | params {results['total_params'] / 1e6:.1f} M")
+          f"FLOPs {results['total_flops'] / 1e9:.2f} G ({params['flops_counter']}) | "
+          f"params {results['total_params'] / 1e6:.1f} M")
+    print(f"[retrain] FLOPs por contador: hooks {results['flops_hooks'] / 1e9:.2f} G | "
+          f"pytorch {results['flops_pytorch'] / 1e9:.2f} G "
+          f"({results['flops_pytorch'] / 2e9:.2f} G MACs)")
     print(f"[retrain] saved to {out_dir}")
 
 

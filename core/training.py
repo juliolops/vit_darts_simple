@@ -8,9 +8,13 @@ from core.data import INPUT_SHAPE, head_classes, num_classes
 from core.vit import build_pruned_vit, load_alphas
 
 
-def count_flops(model: nn.Module, device: str) -> int:
-    """FLOPs of one forward pass on a single image, counting Conv2d and Linear
-    layers (2 x multiply-adds). The attention matrix products are not counted."""
+FLOPS_COUNTERS = ('hooks', 'pytorch')
+
+
+def _count_flops_hooks(model: nn.Module, device: str) -> int:
+    """The project's original counter: Conv2d and Linear layers only (2 x multiply-adds),
+    via forward hooks. The attention matrix products (q @ k^T, attn @ v), softmax,
+    GELU and LayerNorm are not counted, so it undercounts by ~4% on ViT-Base."""
     total = 0
 
     def hook(module, inp, out):
@@ -35,6 +39,34 @@ def count_flops(model: nn.Module, device: str) -> int:
     for h in hooks:
         h.remove()
     return int(total)
+
+
+def _count_flops_pytorch(model: nn.Module, device: str) -> int:
+    """PyTorch's own counter (``torch.utils.flop_counter.FlopCounterMode``): every matrix
+    multiplication and convolution the forward pass runs, including the attention products
+    (also inside ``scaled_dot_product_attention``), at 2 FLOPs per multiply-add.
+    Element-wise ops (softmax, GELU, LayerNorm, residual adds) are not counted.
+    Halve the result to get MACs, the unit many ViT papers call "FLOPs"."""
+    from torch.utils.flop_counter import FlopCounterMode
+
+    model.eval()
+    with torch.no_grad(), FlopCounterMode(display=False) as counter:
+        model(torch.zeros((1, *INPUT_SHAPE), device=device))
+    return int(counter.get_total_flops())
+
+
+def count_flops(model: nn.Module, device: str, method: str = 'hooks') -> int:
+    """FLOPs of one forward pass on a single image (2 FLOPs per multiply-add).
+
+    ``method``: ``'hooks'`` (the original counter, Linear/Conv only) or ``'pytorch'``
+    (``FlopCounterMode``, also counts the attention products). Choose it with
+    ``flops_counter`` in the config; compare results only within one method.
+    """
+    if method == 'hooks':
+        return _count_flops_hooks(model, device)
+    if method == 'pytorch':
+        return _count_flops_pytorch(model, device)
+    raise ValueError(f"Unknown FLOPs counter {method!r}; expected one of {FLOPS_COUNTERS}.")
 
 
 def _format_seconds(seconds: float) -> str:
@@ -132,4 +164,4 @@ def evaluate_candidate(percentages, params: dict, device: str, train_loader, val
             val_accuracies.append(_run_epoch(model, val_loader, device, criterion))
 
     return {'best_accuracy': sum(val_accuracies) / len(val_accuracies),
-            'total_flops': count_flops(model, device)}
+            'total_flops': count_flops(model, device, params['flops_counter'])}
