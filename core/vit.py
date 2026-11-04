@@ -174,11 +174,14 @@ def build_pruned_vit(head_percentages: List[int], alphas: Alphas, num_classes: i
             f"Got alphas for {len(alphas['heads'])} blocks but {model_name} has {n_blocks}. "
             f"Regenerate them with run_darts_alphas.py --model_name {model_name}.")
 
+    # 100% keeps a block untouched (the unpruned baseline of retrain.py --baseline).
     for block, block_alphas, percent in zip(model.blocks, alphas['heads'], head_percentages):
-        prune_attention_heads(block.attn, select_by_alpha(block_alphas, percent))
+        if percent < 100:
+            prune_attention_heads(block.attn, select_by_alpha(block_alphas, percent))
     if mlp_percentages is not None:
         for block, block_alphas, percent in zip(model.blocks, alphas['mlp'], mlp_percentages):
-            prune_mlp_neurons(block.mlp, select_by_alpha(block_alphas, percent))
+            if percent < 100:
+                prune_mlp_neurons(block.mlp, select_by_alpha(block_alphas, percent))
 
     for param in model.parameters():
         param.requires_grad = False

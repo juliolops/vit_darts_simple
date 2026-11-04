@@ -352,6 +352,15 @@ The candidate trains its MLPs + classifier on the train split (`--limit_data_val
 
 `retrain_results/<id>/results.json` holds the chromosome, the per-epoch history (train and validation loss, acc@1, acc@5), the **test accuracy** (`test_accuracy` = top-1, `test_top5`), FLOPs, parameters and the training time; `model_state.pt` holds the weights (rebuild the pruned architecture with the same chromosome and alphas file to load them). A chromosome can also be given directly with `--chromosome 3 5 7 ...`.
 
+To measure what pruning cost, retrain the **unpruned** ViT-Base with the same protocol (same config, epochs, data split, frozen attention, trained MLPs + classifier) and compare the test accuracies:
+
+```bash
+python retrain.py --config_file config_cifar100_pytorch.yaml --baseline --epochs 10 \
+    --output_dir retrain_results/cifar100
+```
+
+It keeps every head and MLP neuron, needs no search or chromosome, and writes to `<output_dir>/baseline/` (`"baseline": true` in `results.json`).
+
 ## License
 
 MIT. See the LICENSE file.
