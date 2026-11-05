@@ -9,6 +9,9 @@ the test set, so the test accuracy is an unbiased estimate.
 
     python retrain.py --config_file config.yaml \
         --pareto_history experiments/exp1/pareto_history.pkl --id 1_3 --epochs 10
+
+``--baseline`` retrains the unpruned ViT (every head and MLP neuron kept) with the
+same protocol, so its test accuracy is the reference that shows what pruning cost.
 """
 import argparse
 import json
@@ -48,16 +51,22 @@ def main(args):
                           'data_path': args.data_path,
                           'limit_data_value': args.limit_data_value})
 
-    if args.chromosome is not None:
+    if args.baseline:
+        # Unpruned reference: 100% of every block; no chromosome, no alphas used.
+        chromosome, search_point, name = None, None, 'baseline'
+    elif args.chromosome is not None:
         chromosome, search_point, name = args.chromosome, None, 'custom'
     else:
         chromosome, search_point = find_chromosome(args.pareto_history, args.id)
         name = args.id
-    if len(chromosome) != params['num_genes']:
+    if chromosome is None:
+        percentages = [100] * params['num_genes']
+    elif len(chromosome) != params['num_genes']:
         raise ValueError(f"Chromosome has {len(chromosome)} genes but {args.config_file} "
                          f"expects {params['num_genes']} (num_blocks x "
                          f"{'2' if params['prune_mlp'] else '1'}).")
-    percentages = [params['percentages'][g] for g in chromosome]
+    else:
+        percentages = [params['percentages'][g] for g in chromosome]
 
     device = resolve_device()
     train_loader, val_loader = build_loaders(params, device)
@@ -104,7 +113,8 @@ def main(args):
 
     results = {
         'id': name,
-        'chromosome': list(chromosome),
+        'chromosome': None if chromosome is None else list(chromosome),
+        'baseline': chromosome is None,
         'percentages': percentages,
         'search_objectives': search_point and {k: search_point[k]
                                                for k in ('best_accuracy', 'total_flops')},
@@ -153,6 +163,9 @@ if __name__ == '__main__':
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--id', type=str, help="Candidate id in the Pareto history, e.g. '1_3'.")
     source.add_argument('--chromosome', type=int, nargs='+', help='Genes, e.g. 3 5 7 ...')
+    source.add_argument('--baseline', action='store_true',
+                        help='Retrain the unpruned ViT (all heads and MLP neurons) as the '
+                             'reference for the cost of pruning. Results go to <output_dir>/baseline.')
     parser.add_argument('--pareto_history', type=str, default=None,
                         help='pareto_history.pkl of the search (required with --id).')
     parser.add_argument('--epochs', type=int, default=10)
