@@ -26,6 +26,10 @@ The CIFAR-10 **test set is held out for the final evaluation only**. Every phase
 
 The test set is only reachable through `core.data.build_test_dataset`, which only `retrain.py` calls, after training.
 
+## Guide (Portuguese)
+
+[`docs/vit-nas-por-dentro.html`](docs/vit-nas-por-dentro.html), *ViT-NAS por Dentro*, is a didactic guide to the whole pipeline, in Portuguese: the ViT-Base anatomy, the data protocol, DARTS (with an interactive alpha playground), surgical pruning, the NSGA-II search, the FLOPs counters and the config fields. It also records the CIFAR-10 and CIFAR-100 experiments run with this code (settings, Pareto front, test results, and the unpruned baseline). It is one self-contained HTML file: download it and open it in a browser (GitHub only shows its source). Its buttons save the results as JSON and the CIFAR-10 Pareto front as CSV.
+
 ## Project structure
 
 ```
@@ -33,6 +37,7 @@ The test set is only reachable through `core.data.build_test_dataset`, which onl
 ├── vit_transformer_search.py  # DARTS attention/MLP wrappers + training epoch
 ├── run_all_evolution.py       # Phase 2: multi-objective search
 ├── retrain.py                 # Phase 3: retrain a Pareto candidate, evaluate once on the test set
+├── docs/vit-nas-por-dentro.html  # Didactic guide in Portuguese (open in a browser)
 ├── config.yaml                # Search space, ViT and training settings
 ├── algorithms/
 │   └── nsga.py                # pymoo NSGA-II/III ask-tell loop, Pareto archive + hypervolume

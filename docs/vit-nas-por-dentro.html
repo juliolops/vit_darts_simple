@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ViT-NAS por Dentro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: guia técnico com índice fixo à esquerda (desktop) e coluna única de leitura;
+   azul-petróleo marca tudo que é ATENÇÃO, âmbar marca tudo que é MLP. */
+:root {
+  --bg: #F3F5F8;
+  --surface: #FFFFFF;
+  --fg: #151A22;
+  --muted: #586273;
+  --line: #D9DFE7;
+  --accent: #2F49C4;
+  --attn: #0D8577;
+  --attn-soft: #D6F0EC;
+  --mlp: #B86E0A;
+  --mlp-soft: #F8E8CF;
+  --code-bg: #ECEFF4;
+  --frozen: #8A93A3;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1116; --surface: #161A21; --fg: #E5E8ED; --muted: #98A1B0; --line: #29303B;
+    --accent: #8FA3FF; --attn: #3FC6B6; --attn-soft: #12332F; --mlp: #F0AE4B; --mlp-soft: #3A2A12;
+    --code-bg: #1B2029; --frozen: #6E7787; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1116; --surface: #161A21; --fg: #E5E8ED; --muted: #98A1B0; --line: #29303B;
+  --accent: #8FA3FF; --attn: #3FC6B6; --attn-soft: #12332F; --mlp: #F0AE4B; --mlp-soft: #3A2A12;
+  --code-bg: #1B2029; --frozen: #6E7787; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 17px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+.shell { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
+@media (max-width: 900px) { .shell { grid-template-columns: minmax(0, 1fr); gap: 0; } nav.toc { display: none; } }
+
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; padding-top: 40px; font-size: 14.5px; }
+nav.toc p { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: toc; }
+nav.toc li { counter-increment: toc; }
+nav.toc a { display: flex; gap: 10px; color: var(--muted); text-decoration: none; padding: 4px 8px; border-radius: 6px; }
+nav.toc a::before { content: counter(toc, decimal-leading-zero); font-family: var(--font-mono); font-size: 12px; padding-top: 2px; opacity: .7; }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--fg); background: var(--surface); outline: none; }
+
+main { min-width: 0; max-width: 780px; }
+header.hero { padding: 48px 0 32px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: clamp(2.4rem, 6vw, 3.6rem); line-height: 1.02; margin: 0 0 16px; text-wrap: balance; letter-spacing: -.02em; }
+.lede { font-size: 1.2rem; color: var(--muted); max-width: 62ch; margin: 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 28px; }
+.fact { border-top: 2px solid var(--fg); padding-top: 8px; }
+.fact b { display: block; font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fact span { font-size: 14px; color: var(--muted); }
+
+section { padding-top: 40px; scroll-margin-top: 16px; }
+h2 { font-family: var(--font-display); font-weight: 700; font-size: 1.85rem; line-height: 1.15; margin: 0 0 6px; text-wrap: balance; letter-spacing: -.01em; }
+h2 .num { font-family: var(--font-mono); font-size: .9rem; font-weight: 400; color: var(--muted); display: block; letter-spacing: .06em; margin-bottom: 6px; }
+h3 { font-family: var(--font-display); font-weight: 500; font-size: 1.25rem; margin: 28px 0 6px; }
+p { margin: 0 0 14px; max-width: 68ch; }
+.files { font-family: var(--font-mono); font-size: 13px; color: var(--muted); margin: 0 0 18px; }
+.files code { color: var(--fg); }
+code { font-family: var(--font-mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { font-family: var(--font-mono); font-size: 13.5px; line-height: 1.55; background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; margin: 0 0 18px; }
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .c { color: var(--muted); }
+pre .k { color: var(--accent); font-weight: 600; }
+.attn { color: var(--attn); font-weight: 600; }
+.mlp { color: var(--mlp); font-weight: 600; }
+ul.tight { padding-left: 20px; margin: 0 0 14px; max-width: 68ch; }
+ul.tight li { margin-bottom: 6px; }
+
+.analogy { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin: 0 0 18px; max-width: 66ch; }
+.analogy b { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 2px; }
+.warn { border-left: 3px solid var(--mlp); padding: 4px 0 4px 16px; margin: 0 0 18px; max-width: 66ch; }
+.warn b { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mlp); display: block; margin-bottom: 2px; }
+
+.tablewrap { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: none; }
+td.n { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Pipeline */
+.pipeline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 8px 0 20px; }
+@media (max-width: 640px) { .pipeline { grid-template-columns: minmax(0, 1fr); } }
+.phase { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+.phase .tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.phase h4 { font-family: var(--font-display); font-size: 1.15rem; margin: 0; }
+.phase p { font-size: 15px; margin: 0; color: var(--muted); }
+.phase .io { font-family: var(--font-mono); font-size: 12px; border-top: 1px dashed var(--line); padding-top: 8px; margin-top: auto; }
+
+/* Block diagram */
+.vitdiagram { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 0 0 20px; display: grid; gap: 8px; }
+.vrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.vbox { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 14px; background: var(--bg); }
+.vbox small { display: block; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.vbox.attnb { border-color: var(--attn); background: var(--attn-soft); }
+.vbox.mlpb { border-color: var(--mlp); background: var(--mlp-soft); }
+.arrow { color: var(--muted); font-family: var(--font-mono); }
+.blockframe { border: 1.5px dashed var(--muted); border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
+.blockframe > .lbl { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.chip { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.chip.fz { color: var(--frozen); }
+.chip.tr { color: var(--accent); }
+.chip.al { color: var(--fg); }
+
+/* Interactive panels */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin: 0 0 22px; }
+.panel h4 { font-family: var(--font-display); font-size: 1.1rem; margin: 0 0 4px; }
+.panel .hint { font-size: 14px; color: var(--muted); margin: 0 0 14px; }
+.sliders { display: grid; gap: 12px; }
+.srow { display: grid; grid-template-columns: 74px minmax(0, 1fr) 200px; gap: 12px; align-items: center; }
+@media (max-width: 560px) { .srow { grid-template-columns: 62px minmax(0, 1fr); } .srow .barcell { grid-column: 1 / -1; } }
+.srow label { font-family: var(--font-mono); font-size: 13px; }
+.srow input[type=range] { width: 100%; accent-color: var(--attn); }
+.barcell { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.bar { height: 14px; background: var(--attn); border-radius: 3px; min-width: 2px; transition: width .15s; }
+.bar.cut { background: var(--frozen); opacity: .45; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 14px; font-size: 15px; }
+.controls select, .controls button { font: inherit; font-size: 14px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+.controls button:hover { border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.readout { font-family: var(--font-mono); font-size: 13px; color: var(--muted); margin-top: 10px; }
+
+/* Matrix slicing figure */
+.figure { overflow-x: auto; margin: 0 0 8px; }
+.figure svg { display: block; max-width: 100%; height: auto; }
+.caption { font-size: 14px; color: var(--muted); margin: 0 0 20px; }
+
+/* Pareto */
+.pareto-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 760px) { .pareto-grid { grid-template-columns: minmax(0, 1fr); } }
+#pareto { width: 100%; height: auto; display: block; }
+#pareto .pt { cursor: pointer; }
+#pareto .pt:focus-visible circle { stroke: var(--accent); stroke-width: 3; }
+.detail h5 { font-family: var(--font-display); font-size: 1.3rem; margin: 0; }
+.detail .meta { font-family: var(--font-mono); font-size: 13px; color: var(--muted); margin: 2px 0 12px; font-variant-numeric: tabular-nums; }
+.blocks { display: grid; grid-template-columns: 52px repeat(12, minmax(0, 1fr)); gap: 3px; align-items: end; font-family: var(--font-mono); font-size: 10.5px; }
+.blocks .rl { color: var(--muted); align-self: center; }
+.col { display: flex; flex-direction: column; justify-content: flex-end; height: 70px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.col i { display: block; width: 100%; }
+.col.a i { background: var(--attn); }
+.col.m i { background: var(--mlp); }
+.blocks .bn { text-align: center; color: var(--muted); }
+.blocks .v { text-align: center; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin-top: 10px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+
+.steps { counter-reset: st; list-style: none; padding: 0; margin: 0 0 18px; display: grid; gap: 10px; max-width: 70ch; }
+.steps li { counter-increment: st; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; }
+.steps li::before { content: counter(st); font-family: var(--font-mono); font-size: 13px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; background: var(--surface); }
+
+.dlbar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.dlbtn { font: inherit; font-size: 14px; font-weight: 600; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.dlbtn:hover { border-color: var(--accent); color: var(--accent); }
+.dlbtn small { font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--muted); }
+.dlbtn[disabled] { opacity: .5; cursor: default; }
+.dlstatus { font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 1.2em; }
+.timeline { display: grid; gap: 0; margin: 0 0 20px; border-left: 2px solid var(--line); padding-left: 18px; }
+.tl { position: relative; padding: 0 0 18px; }
+.tl::before { content: ""; position: absolute; left: -25px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); }
+.tl.bad::before { border-color: var(--mlp); }
+.tl h4 { font-family: var(--font-display); font-size: 1.05rem; margin: 0; }
+.tl .when { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.tl p { margin: 4px 0 0; font-size: 15.5px; }
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+
+</head>
+<body>
+<div class="shell">
+<nav class="toc" aria-label="Índice">
+  <p>Neste guia</p>
+  <ol>
+    <li><a href="#ideia">A ideia geral</a></li>
+    <li><a href="#vit">Anatomia do ViT</a></li>
+    <li><a href="#dados">Os dados</a></li>
+    <li><a href="#darts">Fase 1: DARTS</a></li>
+    <li><a href="#poda">A poda cirúrgica</a></li>
+    <li><a href="#busca">Fase 2: busca</a></li>
+    <li><a href="#resultados">Seus resultados</a></li>
+    <li><a href="#teste">Fase 3: teste</a></li>
+    <li><a href="#arquivos">Mapa dos arquivos</a></li>
+    <li><a href="#config">O config.yaml</a></li>
+    <li><a href="#atencao">Pontos de atenção</a></li>
+    <li><a href="#registro">Registro CIFAR-10</a></li>
+    <li><a href="#cifar100">Experimento CIFAR-100</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <p class="eyebrow">Guia do repositório vit_darts_simple</p>
+  <h1>ViT-NAS por Dentro</h1>
+  <p class="lede">Como o código encolhe um Vision Transformer pré-treinado para o CIFAR-10 e o CIFAR-100: o que cada arquivo faz, por que foi feito assim, e onde os seus números entram nessa história.</p>
+  <div class="facts">
+    <div class="fact"><b>33,7 G</b><span>FLOPs do ViT-Base completo, por imagem</span></div>
+    <div class="fact"><b>12,5 G</b><span>o candidato mais barato da sua busca</span></div>
+    <div class="fact"><b>3 fases</b><span>DARTS, busca genética, teste</span></div>
+    <div class="fact"><b>24 genes</b><span>12 de cabeças e 12 de MLP</span></div>
+    <div class="fact"><b>95,97%</b><span>acurácia de teste do candidato 17_5</span></div>
+    <div class="fact"><b>95,67%</b><span>acurácia de teste do candidato 6_0</span></div>
+    <div class="fact"><b>83,63%</b><span>teste no CIFAR-100 (19_12), com 47% menos FLOPs</span></div>
+    <div class="fact"><b>−1,2 ponto</b><span>custo da poda no CIFAR-100, contra o ViT-Base sem poda (84,86%)</span></div>
+  </div>
+  <div class="dlbar" data-dl>
+    <button type="button" class="dlbtn" data-kind="html">Baixar esta página <small>.html</small></button>
+    <button type="button" class="dlbtn" data-kind="json">Resultados CIFAR-10 <small>.json</small></button>
+    <button type="button" class="dlbtn" data-kind="json100">Resultados CIFAR-100 <small>.json</small></button>
+    <button type="button" class="dlbtn" data-kind="csv">Frente de Pareto <small>.csv</small></button>
+  </div>
+  <p class="dlstatus" data-dlstatus aria-live="polite"></p>
+</header>
+
+<!-- 1 -->
+<section id="ideia">
+  <h2><span class="num">01</span>A ideia geral</h2>
+  <p>O <b>ViT-Base</b> é um modelo grande: 86 milhões de parâmetros e cerca de 33,7 bilhões de operações (FLOPs) para classificar uma única imagem. Para o CIFAR-10, que tem só 10 classes, boa parte dessa capacidade sobra. O projeto pergunta: <b>quanto dá para cortar do modelo sem perder muita acurácia?</b></p>
+  <p>Cortar exige responder duas perguntas diferentes, e o código separa cada uma numa fase:</p>
+  <ul class="tight">
+    <li><b>Quais</b> partes cortar primeiro? As menos importantes. A Fase 1 (DARTS) aprende uma nota de importância para cada cabeça de atenção e para cada neurônio do MLP.</li>
+    <li><b>Quanto</b> cortar em cada bloco? A Fase 2 (algoritmo genético) testa centenas de combinações de "quanto cortar" e fica com as que equilibram melhor acurácia e custo.</li>
+  </ul>
+  <p>A Fase 3 pega a combinação escolhida, treina com calma e mede a acurácia no conjunto de teste, que ficou guardado até ali.</p>
+  <div class="analogy"><b>Analogia</b>Pense numa empresa que precisa cortar custos. A Fase 1 é a avaliação de desempenho de cada funcionário. A Fase 2 é decidir quantas pessoas cada departamento perde, testando vários cenários. A avaliação diz <i>quem</i> sai primeiro; os cenários dizem <i>quantos</i>.</div>
+
+  <div class="pipeline">
+    <div class="phase"><span class="tag">Fase 1</span><h4>DARTS</h4><p>Aprende a importância (alpha) de cada cabeça e de cada neurônio.</p><div class="io">run_darts_alphas.py<br>→ darts_alphas/*.json</div></div>
+    <div class="phase"><span class="tag">Fase 2</span><h4>Busca genética</h4><p>Testa quantas cabeças e neurônios cada bloco mantém. Duas notas: acurácia e FLOPs.</p><div class="io">run_all_evolution.py<br>→ pareto_history.pkl</div></div>
+    <div class="phase"><span class="tag">Fase 3</span><h4>Retreino e teste</h4><p>Treina o candidato escolhido com todos os dados e avalia no teste uma única vez.</p><div class="io">retrain.py<br>→ retrain_results/&lt;id&gt;/</div></div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="vit">
+  <h2><span class="num">02</span>Anatomia do ViT-Base</h2>
+  <p class="files">modelo: <code>vit_base_patch16_224</code> da biblioteca <code>timm</code></p>
+  <p>Antes de entender a poda, vale ver o que existe para podar. O ViT trata uma imagem como uma frase: corta a imagem em pedaços (<i>patches</i>) e trata cada pedaço como uma "palavra" (<i>token</i>).</p>
+  <ul class="tight">
+    <li>A imagem do CIFAR-10 (32×32) é ampliada para <b>224×224</b> e cortada em patches de 16×16: são 14×14 = <b>196 patches</b>.</li>
+    <li>Cada patch vira um vetor de <b>768 números</b>. Somando um token especial de classificação (<code>CLS</code>), são <b>197 tokens</b>.</li>
+    <li>Esses tokens passam por <b>12 blocos</b> iguais. No fim, o token <code>CLS</code> vai para o classificador, que dá as 10 notas (uma por classe).</li>
+  </ul>
+
+  <div class="vitdiagram" role="img" aria-label="Diagrama de um bloco do ViT com atenção e MLP">
+    <div class="vrow">
+      <div class="vbox">Imagem<small>224×224×3</small></div><span class="arrow">→</span>
+      <div class="vbox">Patches + CLS<small>197 tokens × 768</small></div>
+      <span class="chip fz">congelado</span>
+    </div>
+    <div class="blockframe">
+      <span class="lbl">Bloco (repete 12 vezes)</span>
+      <div class="vrow">
+        <div class="vbox">LayerNorm</div><span class="arrow">→</span>
+        <div class="vbox attnb">Atenção<small>12 cabeças × 64 dims</small></div>
+        <span class="chip al">× peso da cabeça</span><span class="chip fz">congelado</span>
+        <span class="arrow">→ soma com a entrada</span>
+      </div>
+      <div class="vrow">
+        <div class="vbox">LayerNorm</div><span class="arrow">→</span>
+        <div class="vbox mlpb">MLP<small>768 → 3072 → 768</small></div>
+        <span class="chip al">× peso do neurônio</span><span class="chip tr">treinado</span>
+        <span class="arrow">→ soma com a entrada</span>
+      </div>
+    </div>
+    <div class="vrow">
+      <div class="vbox">Token CLS</div><span class="arrow">→</span>
+      <div class="vbox">Classificador<small>768 → 10 classes</small></div>
+      <span class="chip tr">treinado</span>
+    </div>
+  </div>
+
+  <h3>As duas peças que o projeto poda</h3>
+  <p><span class="attn">Atenção (multi-head).</span> Cada bloco tem 12 "cabeças". Cada cabeça é um mecanismo independente que olha para todos os tokens e decide quais são relevantes para cada um. Uma cabeça pode aprender a olhar bordas, outra a relação entre regiões distantes. Muitas acabam sendo redundantes.</p>
+  <p><span class="mlp">MLP.</span> Depois da atenção, cada token passa por uma rede de duas camadas: <code>fc1</code> expande de 768 para <b>3072 neurônios</b>, e <code>fc2</code> volta para 768. O MLP responde por cerca de <b>2/3 do custo</b> de cada bloco, por isso podá-lo rende tanto.</p>
+
+  <h3>Congelado ou treinado?</h3>
+  <p>Em todas as fases, o código <b>congela</b> a atenção, os embeddings e as LayerNorms (mantém os pesos pré-treinados do ImageNet) e só <b>treina</b> os MLPs e o classificador. Isso deixa o treino muito mais barato e preserva o que o modelo já sabe sobre imagens. O classificador é novo (o original tinha 1000 classes do ImageNet), então precisa ser aprendido do zero.</p>
+</section>
+
+<!-- 3 -->
+<section id="dados">
+  <h2><span class="num">03</span>Os dados</h2>
+  <p class="files">arquivo: <code>core/data.py</code></p>
+  <p>O CIFAR-10 vem com 50 mil imagens de treino e 10 mil de teste. O código divide as 50 mil de treino em duas partes, sempre do mesmo jeito (semente fixa <code>split_seed: 2025</code>):</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Conjunto</th><th>Imagens</th><th>Para que serve</th></tr></thead>
+    <tbody>
+      <tr><td><b>Treino</b></td><td class="n">45.000</td><td>Ajustar os pesos (MLP e classificador)</td></tr>
+      <tr><td><b>Validação</b></td><td class="n">5.000</td><td>Ajustar os alphas, escolher épocas, dar nota aos candidatos</td></tr>
+      <tr><td><b>Teste</b></td><td class="n">10.000</td><td>Uma única medida final, no <code>retrain.py</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>A divisão é <b>estratificada</b>: as 10 classes aparecem na mesma proporção dos dois lados. Cada imagem é ampliada para 224×224 e normalizada com a média e o desvio do ImageNet, porque é isso que o modelo pré-treinado espera receber.</p>
+  <h3>O <code>limit_data_value</code></h3>
+  <p>Treinar cada um dos 400 candidatos da busca com 45 mil imagens levaria dias. Por isso, <code>limit_data_value</code> sorteia um subconjunto <b>balanceado</b> (mesmo número de imagens por classe). São 90% para treino e 10% para validação: na busca <code>busca_mlp1</code> o valor foi 10000 (9.000 imagens de treino e 1.000 de validação por candidato); na <code>busca_mlp_pytorch</code>, 5000 (4.500 e 500).</p>
+  <div class="analogy"><b>Analogia</b>A validação é o simulado que você faz várias vezes para ajustar o estudo. O teste é a prova final, que você só vê uma vez. Se você olhasse a prova final para decidir como estudar, a nota dela deixaria de medir o que você realmente sabe.</div>
+</section>
+
+<!-- 4 -->
+<section id="darts">
+  <h2><span class="num">04</span>Fase 1: DARTS aprende a importância de cada peça</h2>
+  <p class="files">arquivos: <code>vit_transformer_search.py</code> (as peças) e <code>run_darts_alphas.py</code> (o treino)</p>
+  <p>DARTS (<i>Differentiable Architecture Search</i>) transforma uma decisão discreta ("esta cabeça fica ou sai?") numa quantidade contínua que pode ser aprendida por gradiente, como qualquer outro peso da rede.</p>
+
+  <h3>O truque: multiplicar cada peça por um peso aprendido</h3>
+  <p>O código embrulha a atenção e o MLP de cada bloco em duas classes, <code>DartsAttentionWrapper</code> e <code>DartsMlpWrapper</code>. Cada uma ganha um vetor de parâmetros chamados <b>alphas</b>: 12 por bloco na atenção (um por cabeça) e 3072 por bloco no MLP (um por neurônio). Na passagem para frente, a saída de cada cabeça e de cada neurônio é multiplicada por:</p>
+  <pre><code><span class="k">def</span> normalized_weights(alphas):
+    <span class="c"># N * softmax(alphas): média 1, então alphas iguais deixam a camada intacta</span>
+    <span class="k">return</span> alphas.numel() * F.softmax(alphas, dim=0)</code></pre>
+  <p>O <code>softmax</code> transforma os alphas em proporções que somam 1. Multiplicar por N (12 ou 3072) faz os pesos terem <b>média 1</b>. Como todos os alphas começam iguais, todos os pesos começam em 1, e o modelo inicial é exatamente o ViT pré-treinado. Ao longo do treino, peças úteis ganham peso acima de 1 e peças dispensáveis caem abaixo de 1.</p>
+
+  <div class="panel" id="playground">
+    <h4>Experimente: 4 cabeças, um bloco</h4>
+    <p class="hint">Mova os alphas. As barras mostram o peso <code>N · softmax(alpha)</code> de cada cabeça, que sempre tem média 1. Escolha quanto manter para ver quais cabeças sobrevivem à poda.</p>
+    <div class="sliders" id="sliders"></div>
+    <div class="controls">
+      <label for="keep">Manter</label>
+      <select id="keep">
+        <option value="25">25% (1 cabeça)</option>
+        <option value="50" selected>50% (2 cabeças)</option>
+        <option value="75">75% (3 cabeças)</option>
+        <option value="100">100% (todas)</option>
+      </select>
+      <button type="button" id="reset">Voltar ao início (alphas iguais)</button>
+      <button type="button" id="spike">Simular divergência</button>
+    </div>
+    <p class="readout" id="readout"></p>
+  </div>
+  <p>O botão "Simular divergência" mostra o problema que você enfrentou na primeira execução: o softmax é exponencial, então se um alpha se afasta poucas unidades dos outros, aquela peça passa a ter peso muito maior que 1. A ativação dela é amplificada, e com um <code>lr</code> alto isso pode desestabilizar o treino.</p>
+
+  <h3>O treino em dois passos (bi-nível)</h3>
+  <p>A cada passo (<i>step</i>) do <code>train_darts_epoch</code>, o código faz duas atualizações, com dois otimizadores diferentes:</p>
+  <ol class="steps">
+    <li><div><b>Atualiza os alphas</b> com um lote da <b>validação</b>. A pergunta é: "que importâncias fazem o modelo acertar em imagens que ele não usa para treinar os pesos?"</div></li>
+    <li><div><b>Atualiza os pesos</b> (MLP e classificador) com um lote do <b>treino</b>. A pergunta é: "dados esses alphas, como ajustar a rede?"</div></li>
+  </ol>
+  <p>Separar os dados evita que os alphas apenas decorem o treino. A importância de uma peça é medida pelo quanto ela ajuda em dados novos.</p>
+
+  <h3>As proteções contra divergência</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Proteção</th><th>Opção</th><th>O que faz</th></tr></thead>
+    <tbody>
+      <tr><td>lr baixo nos pesos</td><td><code>--lr_w 1e-4</code></td><td>Muda os pesos pré-treinados devagar. Com 1e-3 eles se deformam.</td></tr>
+      <tr><td>Gradient clipping</td><td><code>--grad_clip 5</code></td><td>Limita o tamanho de cada atualização. Um lote ruim não consegue jogar o modelo longe.</td></tr>
+      <tr><td>Warm-up</td><td><code>--warmup_epochs 1</code></td><td>Na 1ª época só os pesos treinam. Os alphas só começam quando o classificador já sabe algo.</td></tr>
+      <tr><td>Melhor época</td><td>automático</td><td>Valida no conjunto inteiro ao fim de cada época e guarda os alphas da melhor, não da última.</td></tr>
+    </tbody>
+  </table></div>
+  <p>No seu treino, a melhor época foi a <b>3</b>, com <b>95,4%</b> de acurácia na validação completa. Os alphas dela estão em <code>darts_alphas/vit_base_cifar10.json</code>.</p>
+</section>
+
+<!-- 5 -->
+<section id="poda">
+  <h2><span class="num">05</span>Da importância à poda cirúrgica</h2>
+  <p class="files">arquivo: <code>core/vit.py</code> (<code>select_by_alpha</code>, <code>prune_attention_heads</code>, <code>prune_mlp_neurons</code>, <code>build_pruned_vit</code>)</p>
+  <p>Com os alphas prontos, podar um bloco é simples: dada uma porcentagem, o código mantém as peças de <b>maior alpha</b>.</p>
+  <pre><code><span class="k">def</span> select_by_alpha(alphas, percentage):
+    n_keep = max(1, min(len(alphas), round(len(alphas) * percentage / 100)))
+    <span class="c"># índices das n_keep peças com maior alpha (torch.topk)</span></code></pre>
+  <p>Exemplos com 12 cabeças: 30% → round(3,6) = <b>4 cabeças</b>; 40% → round(4,8) = <b>5</b>; 50% → <b>6</b>; 90% → round(10,8) = <b>11</b>. No MLP, 20% de 3072 = <b>614 neurônios</b>.</p>
+
+  <h3>Por que "cirúrgica"</h3>
+  <p>Há dois jeitos de podar. O jeito fácil é <b>mascarar</b>: multiplicar as peças cortadas por zero. Mas a matriz continua do mesmo tamanho, e o custo não muda. O código faz o jeito difícil: <b>reconstrói as camadas</b> só com as linhas e colunas que sobreviveram. O modelo podado fica de fato menor e mais rápido.</p>
+  <p>Na atenção, a camada <code>qkv</code> calcula as consultas (q), chaves (k) e valores (v) de todas as cabeças de uma vez. Os pesos ficam empilhados em linhas: primeiro todas as linhas de q, depois de k, depois de v. Cada cabeça ocupa 64 linhas em cada um dos três trechos. Para remover uma cabeça, o código tira as 64 linhas dela <b>nos três trechos</b>, e as 64 colunas correspondentes da camada <code>proj</code>, que junta as cabeças de volta.</p>
+
+  <div class="figure">
+    <svg viewBox="0 0 660 230" role="img" aria-label="Matriz qkv com 4 cabeças, mantendo as cabeças 0 e 2">
+      <g font-family="JetBrains Mono, monospace" font-size="11" fill="var(--muted)">
+        <text x="10" y="18">qkv.weight (linhas)</text>
+        <text x="430" y="18">proj.weight (colunas)</text>
+      </g>
+      <g id="qkvrows"></g>
+      <g id="projcols"></g>
+      <g font-family="JetBrains Mono, monospace" font-size="11">
+        <text x="10" y="222" fill="var(--attn)">■ cabeça mantida</text>
+        <text x="150" y="222" fill="var(--frozen)">■ cabeça removida</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Exemplo com 4 cabeças, mantendo as cabeças 0 e 2. Em <code>qkv</code>, as linhas de cada cabeça saem dos três trechos (q, k e v). Em <code>proj</code>, saem as colunas das mesmas cabeças.</p>
+  <p>No MLP é mais direto: o neurônio <i>j</i> corresponde à linha <i>j</i> de <code>fc1</code> e à coluna <i>j</i> de <code>fc2</code>. O código mantém só as linhas e colunas dos neurônios escolhidos. A entrada e a saída do bloco continuam com 768 dimensões, então o resto da rede não percebe a mudança de tamanho.</p>
+</section>
+
+<!-- 6 -->
+<section id="busca">
+  <h2><span class="num">06</span>Fase 2: a busca genética escolhe quanto cortar</h2>
+  <p class="files">arquivos: <code>run_all_evolution.py</code> (entrada), <code>algorithms/nsga.py</code> (o algoritmo), <code>core/evaluation.py</code> (GPUs em paralelo), <code>core/training.py</code> (treino e FLOPs)</p>
+
+  <h3>O cromossomo</h3>
+  <p>Cada candidato é descrito por uma lista de números inteiros, o <b>cromossomo</b>. Com <code>prune_mlp: true</code> são 24 genes: os 12 primeiros dizem quantas <span class="attn">cabeças</span> cada bloco mantém, os 12 últimos quantos <span class="mlp">neurônios do MLP</span>. Cada gene é um <b>índice</b> de 0 a 7 na lista <code>percentages</code> do config:</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Gene</th><td class="n">0</td><td class="n">1</td><td class="n">2</td><td class="n">3</td><td class="n">4</td><td class="n">5</td><td class="n">6</td><td class="n">7</td></tr></thead>
+    <tbody><tr><th>Mantém</th><td class="n">20%</td><td class="n">30%</td><td class="n">40%</td><td class="n">50%</td><td class="n">60%</td><td class="n">70%</td><td class="n">80%</td><td class="n">90%</td></tr></tbody>
+  </table></div>
+  <p>Por exemplo, no log da busca o candidato <code>17_5</code> aparece como <code>chrom=[6, 7, 5, 4, ...]</code>. O gene 6 do bloco 0 quer dizer "mantenha 80% das cabeças", o gene 7 do bloco 1, "mantenha 90%". O <code>id</code> <code>17_5</code> significa geração 17, candidato 5.</p>
+
+  <h3>Como cada candidato recebe nota</h3>
+  <p class="files"><code>core/training.py</code> → <code>evaluate_candidate</code></p>
+  <ol class="steps">
+    <li><div><b>Constrói</b> o ViT pré-treinado e poda cada bloco conforme o cromossomo e os alphas.</div></li>
+    <li><div><b>Treina</b> o MLP e o classificador por 3 épocas (<code>max_epochs</code>) no subconjunto de treino. O classificador usa <code>lr</code> 1e-3 (é novo), o MLP 1e-4 (é pré-treinado).</div></li>
+    <li><div><b>Nota de acurácia</b>: a média da validação nas últimas 2 épocas (<code>epochs_to_eval</code>). Apesar do nome <code>best_accuracy</code>, é uma média, o que deixa a nota menos sensível a uma época de sorte.</div></li>
+    <li><div><b>Nota de custo</b>: os FLOPs, contados por <code>count_flops</code>.</div></li>
+  </ol>
+
+  <h3>Como os FLOPs são contados</h3>
+  <p><code>count_flops</code> passa uma imagem de zeros pelo modelo e, com <i>hooks</i>, soma o custo de cada camada linear: entradas × saídas × número de tokens × 2 (uma multiplicação e uma soma). Para o <code>fc1</code> de um bloco completo:</p>
+  <pre><code>768 × 3072 × 197 tokens × 2 = 0,93 GFLOPs   <span class="c"># só uma camada!</span></code></pre>
+  <p>Somando <code>qkv</code> (0,70 G), <code>proj</code> (0,23 G), <code>fc1</code> e <code>fc2</code> (0,93 G cada), um bloco custa 2,79 G. Os 12 blocos, mais o corte em patches, dão os 33,7 G do modelo completo. As multiplicações de matrizes da própria atenção (q·kᵀ e atenção·v) não entram nessa conta.</p>
+  <p>Por isso o config tem a opção <code>flops_counter</code>. Com <code>hooks</code> (padrão) vale a conta acima. Com <code>pytorch</code>, os FLOPs vêm do <code>FlopCounterMode</code> do próprio PyTorch, que soma também a atenção: ~9,9 MFLOPs a mais por cabeça mantida, e <b>35,13 G</b> no modelo completo (medido no servidor). Os dois contam 2 FLOPs por multiplicação-e-soma; muitos artigos reportam MACs, que são metade disso.</p>
+
+  <h3>O NSGA-II, passo a passo</h3>
+  <p class="files"><code>algorithms/nsga.py</code> → <code>run_search</code>, usando a biblioteca pymoo</p>
+  <p>Há dois objetivos que brigam entre si: mais acurácia e menos FLOPs. Não existe um único "melhor"; existe um conjunto de bons compromissos, a <b>frente de Pareto</b>. Um candidato está na frente se nenhum outro é ao mesmo tempo mais preciso e mais barato que ele.</p>
+  <ol class="steps">
+    <li><div><b>Geração 0</b>: 20 cromossomos aleatórios.</div></li>
+    <li><div><b>Avaliação</b> (<code>core/evaluation.py</code>): os 20 vão para uma fila; 3 processos, um por GPU, puxam candidatos até esvaziá-la. Cada candidato recebe uma semente própria, então o resultado não depende de qual GPU o treinou.</div></li>
+    <li><div><b>Seleção</b>: o NSGA-II ordena os candidatos em "camadas" de não dominância e, dentro de cada camada, prefere os mais espalhados (<i>crowding distance</i>), para não concentrar a busca numa região só.</div></li>
+    <li><div><b>Reprodução</b>: os escolhidos geram filhos por <b>cruzamento</b> (SBX, mistura genes de dois pais) e <b>mutação</b> (muda cada gene com probabilidade 1/24). Os valores são arredondados para inteiros. Filhos repetidos são descartados.</div></li>
+    <li><div><b>Arquivo</b>: depois de cada geração, a frente global (os não dominados entre todos os avaliados até ali) e o hipervolume vão para <code>pareto_history.pkl</code>.</div></li>
+    <li><div>Repete por 20 gerações.</div></li>
+  </ol>
+  <div class="analogy"><b>Analogia</b>É como melhorar uma receita por gerações. Você testa 20 versões, guarda as que ficaram boas em algum critério (mais gostosa ou mais barata), mistura as boas entre si e muda um ingrediente aqui e ali. Depois de 20 rodadas, sobram as receitas que nenhuma outra supera nos dois critérios ao mesmo tempo.</div>
+</section>
+
+<!-- 7 -->
+<section id="resultados">
+  <h2><span class="num">07</span>Seus resultados</h2>
+  <p>Esta é a frente de Pareto final da sua busca <code>busca_mlp1</code> (13 candidatos). Clique num ponto para ver como aquele candidato foi podado, bloco a bloco. O <b>17_5</b>, o de maior acurácia, foi o escolhido para o teste final (seção 08).</p>
+  <div class="panel">
+    <div class="pareto-grid">
+      <div><svg id="pareto" viewBox="0 0 360 260" role="group" aria-label="Frente de Pareto: acurácia de validação por GFLOPs"></svg></div>
+      <div class="detail" id="detail" aria-live="polite"></div>
+    </div>
+    <div class="legend">
+      <span style="--c: var(--attn)">cabeças mantidas (de 12)</span>
+      <span style="--c: var(--mlp)">neurônios do MLP mantidos (%)</span>
+    </div>
+  </div>
+  <h3>O que a busca descobriu</h3>
+  <ul class="tight">
+    <li><b>O MLP aguenta muita poda.</b> Mesmo os candidatos mais precisos mantêm só 20–30% dos neurônios em vários blocos.</li>
+    <li><b>As cabeças do meio importam mais.</b> Os blocos 0 e 1 aceitam ficar com 4 cabeças (30%) nos candidatos baratos, mas os blocos 4 e 5 quase sempre mantêm 9 a 11.</li>
+    <li><b>O joelho da curva</b> fica entre 13 e 16 GFLOPs: acima disso, cada GFLOP a mais rende pouca acurácia.</li>
+  </ul>
+  <div class="warn"><b>Lembrete</b>Essas acurácias são notas da busca: 3 épocas, 9.000 imagens, avaliadas em 1.000. Elas servem para comparar candidatos entre si, não para relatar. O número que vale sai da Fase 3.</div>
+</section>
+
+<!-- 8 -->
+<section id="teste">
+  <h2><span class="num">08</span>Fase 3: retreino e teste final</h2>
+  <p class="files">arquivo: <code>retrain.py</code></p>
+  <ol class="steps">
+    <li><div><b>Busca o cromossomo</b> do <code>--id</code> no <code>pareto_history.pkl</code> e traduz os genes em porcentagens, usando o mesmo config da busca. Por isso o <code>--config_file</code> tem de ser o mesmo (<code>config_mlp.yaml</code>).</div></li>
+    <li><div><b>Treina</b> o modelo podado com todas as 45 mil imagens de treino, por <code>--epochs</code> épocas.</div></li>
+    <li><div><b>Valida</b> ao fim de cada época nas 5 mil imagens de validação e guarda uma cópia dos pesos da melhor época.</div></li>
+    <li><div><b>Só então</b> carrega o conjunto de teste, pela primeira e única vez, e mede a acurácia dos pesos da melhor época.</div></li>
+    <li><div><b>Salva</b> <code>results.json</code> (acurácia de teste, curva de validação, FLOPs, parâmetros, cromossomo) e <code>model_state.pt</code> (os pesos).</div></li>
+  </ol>
+  <pre><code>CUDA_VISIBLE_DEVICES=0 python retrain.py --config_file config_mlp.yaml \
+    --pareto_history experiment_vit/cifar10/busca_mlp1/pareto_history.pkl \
+    --id 17_5 --epochs 10 --output_dir retrain_results/cifar10</code></pre>
+
+  <h3>Resultado: candidato 17_5</h3>
+  <p>Retreinado em 2 de novembro de 2026 com as 45 mil imagens de treino, por 10 épocas, numa GPU A30.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Medida</th><th>Valor</th><th>Comentário</th></tr></thead>
+    <tbody>
+      <tr><td><b>Acurácia de teste (top-1)</b></td><td class="n"><b>95,97%</b></td><td>10 mil imagens, avaliadas uma única vez</td></tr>
+      <tr><td>Acurácia de teste (top-5)</td><td class="n">99,95%</td><td>A classe certa está entre as 5 maiores notas</td></tr>
+      <tr><td>Melhor época (validação)</td><td class="n">7 · 95,98%</td><td>Os pesos dessa época foram os testados</td></tr>
+      <tr><td>Última época</td><td class="n">treino 99,20% · val 95,00%</td><td>O treino seguiu subindo e a validação parou: sinal de sobreajuste leve, contornado pela escolha da época 7</td></tr>
+      <tr><td>FLOPs</td><td class="n">18,82 G</td><td>44% menos que o ViT-Base completo (33,7 G)</td></tr>
+      <tr><td>Parâmetros</td><td class="n">48,0 M</td><td>O ViT-Base tem 86 M: 44% menos</td></tr>
+      <tr><td>Tempo de retreino</td><td class="n">53 min</td><td>Cerca de 5 min por época</td></tr>
+    </tbody>
+  </table></div>
+  <p>A acurácia de teste (95,97%) ficou praticamente igual à da validação na melhor época (95,98%). Isso indica que escolher a época pela validação não inflou o resultado. Na busca, o 17_5 tinha nota 94,45%; a diferença vem do treino completo (45 mil imagens e 10 épocas, contra 9.000 imagens e 3 épocas).</p>
+
+  <h3>Resultado: candidato 6_0 (busca com FLOPs do PyTorch)</h3>
+  <p>Da busca <code>busca_mlp_pytorch</code>, que repetiu a busca do CIFAR-10 com o contador de FLOPs do PyTorch. O 6_0 teve a maior nota da busca (92,6%). Retreinado em 3 de novembro de 2026, com o mesmo protocolo do 17_5.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Medida</th><th>6_0</th><th>17_5</th></tr></thead>
+    <tbody>
+      <tr><td><b>Acurácia de teste (top-1)</b></td><td class="n"><b>95,67%</b></td><td class="n"><b>95,97%</b></td></tr>
+      <tr><td>Acurácia de teste (top-5)</td><td class="n">99,87%</td><td class="n">99,95%</td></tr>
+      <tr><td>Melhor época (validação)</td><td class="n">6 · 95,84%</td><td class="n">7 · 95,98%</td></tr>
+      <tr><td>Última época (treino · val)</td><td class="n">99,14% · 95,52%</td><td class="n">99,20% · 95,00%</td></tr>
+      <tr><td>FLOPs, contador hooks</td><td class="n">21,36 G (−36,6%)</td><td class="n">18,82 G (−44,1%)</td></tr>
+      <tr><td>FLOPs, contador PyTorch</td><td class="n">22,36 G (−36,4%)</td><td class="n">19,77 G* (−43,7%)</td></tr>
+      <tr><td>MACs (PyTorch ÷ 2)</td><td class="n">11,18 G</td><td class="n">9,89 G*</td></tr>
+      <tr><td>Parâmetros</td><td class="n">54,5 M (−37%)</td><td class="n">48,0 M (−44%)</td></tr>
+      <tr><td>Tempo de retreino</td><td class="n">1h00</td><td class="n">53 min</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">* Calculado, não medido: o retreino do 17_5 rodou antes da opção <code>pytorch</code> existir. Reduções em relação ao ViT-Base completo: 33,70 G (hooks), 35,13 G (PyTorch) e 86 M parâmetros.</p>
+  <p>O <b>17_5 domina o 6_0</b>: é mais preciso no teste (+0,30 ponto) e mais barato (−12% de FLOPs). A explicação provável está na busca, não no contador. A <code>busca_mlp1</code> treinou cada candidato com 9.000 imagens e avaliou em 1.000; a <code>busca_mlp_pytorch</code>, com 4.500 e 500. Com metade dos dados, as notas da busca ficam mais ruidosas, e a escolha do “melhor” candidato fica menos confiável. Para comparar os dois contadores de forma justa, as duas buscas precisam usar o mesmo <code>limit_data_value</code>.</p>
+  <div class="warn"><b>Para comparar</b>No CIFAR-10 ainda falta a referência do ViT-Base sem poda treinado com o mesmo protocolo. Ela já existe para o CIFAR-100 (seção 13) e sai com <code>retrain.py --baseline</code>.</div>
+</section>
+
+<!-- 9 -->
+<section id="arquivos">
+  <h2><span class="num">09</span>Mapa dos arquivos</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Arquivo</th><th>Papel</th><th>Funções principais</th></tr></thead>
+    <tbody>
+      <tr><td><code>config.yaml</code></td><td>Todos os parâmetros do experimento</td><td>—</td></tr>
+      <tr><td><code>core/config.py</code></td><td>Lê e valida o config; aplica opções da linha de comando</td><td><code>load_config</code></td></tr>
+      <tr><td><code>core/data.py</code></td><td>Divide o CIFAR-10 e prepara as imagens</td><td><code>build_datasets</code>, <code>build_loaders</code>, <code>build_test_dataset</code></td></tr>
+      <tr><td><code>vit_transformer_search.py</code></td><td>Peças do DARTS: atenção e MLP com alphas; uma época de treino</td><td><code>DartsAttentionWrapper</code>, <code>DartsMlpWrapper</code>, <code>train_darts_epoch</code>, <code>evaluate</code></td></tr>
+      <tr><td><code>run_darts_alphas.py</code></td><td>Fase 1: treina e salva os alphas</td><td><code>main</code>, <code>summarize_alphas</code></td></tr>
+      <tr><td><code>core/vit.py</code></td><td>Lê os alphas e poda o modelo de verdade</td><td><code>select_by_alpha</code>, <code>prune_attention_heads</code>, <code>prune_mlp_neurons</code>, <code>build_pruned_vit</code></td></tr>
+      <tr><td><code>core/training.py</code></td><td>Treina um candidato e calcula as duas notas</td><td><code>evaluate_candidate</code>, <code>count_flops</code>, <code>make_optimizer</code></td></tr>
+      <tr><td><code>core/evaluation.py</code></td><td>Avalia uma geração em paralelo, um processo por GPU</td><td><code>EvalPopulation</code></td></tr>
+      <tr><td><code>algorithms/nsga.py</code></td><td>Loop do NSGA-II/III, arquivo de Pareto, hipervolume</td><td><code>run_search</code>, <code>build_algorithm</code></td></tr>
+      <tr><td><code>run_all_evolution.py</code></td><td>Fase 2: ponto de entrada da busca</td><td><code>main</code></td></tr>
+      <tr><td><code>retrain.py</code></td><td>Fase 3: retreino e teste</td><td><code>main</code>, <code>find_chromosome</code></td></tr>
+      <tr><td><code>core/utils.py</code></td><td>Sementes, logs, escolha de GPU</td><td><code>set_global_seeds</code>, <code>seed_candidate</code>, <code>resolve_device</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 10 -->
+<section id="config">
+  <h2><span class="num">10</span>O config.yaml, campo a campo</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Campo</th><th>Valor</th><th>O que controla</th></tr></thead>
+    <tbody>
+      <tr><td><code>num_blocks</code></td><td class="n">12</td><td>Blocos do ViT; um gene de cabeça por bloco</td></tr>
+      <tr><td><code>prune_mlp</code></td><td class="n">false / true</td><td>Se true, 12 genes a mais para o MLP (no <code>config_mlp.yaml</code>)</td></tr>
+      <tr><td><code>percentages</code></td><td class="n">20…90</td><td>As opções de cada gene</td></tr>
+      <tr><td><code>vit_alphas_path</code></td><td><code>darts_alphas/…json</code></td><td>Os alphas que a busca e o retreino usam</td></tr>
+      <tr><td><code>batch_size</code></td><td class="n">32</td><td>Imagens por lote no treino dos candidatos</td></tr>
+      <tr><td><code>max_epochs</code></td><td class="n">3</td><td>Épocas de treino de cada candidato na busca</td></tr>
+      <tr><td><code>epochs_to_eval</code></td><td class="n">2</td><td>Quantas das últimas épocas entram na média da acurácia</td></tr>
+      <tr><td><code>learning_rate</code></td><td class="n">1e-3</td><td>lr do classificador (camada nova)</td></tr>
+      <tr><td><code>mlp_learning_rate</code></td><td class="n">1e-4</td><td>lr dos MLPs pré-treinados</td></tr>
+      <tr><td><code>train_split</code></td><td class="n">0.9</td><td>Proporção treino/validação</td></tr>
+      <tr><td><code>split_seed</code></td><td class="n">2025</td><td>Semente da divisão; igual em todas as fases</td></tr>
+      <tr><td><code>limit_data_value</code></td><td class="n">1000</td><td>Imagens por candidato na busca (sobrescrito por <code>--limit_data_value</code>)</td></tr>
+      <tr><td><code>threads</code></td><td class="n">1</td><td>Candidatos em paralelo (sobrescrito por <code>--threads</code>)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 11 -->
+<section id="atencao">
+  <h2><span class="num">11</span>Pontos de atenção</h2>
+  <ul class="tight">
+    <li><b>A validação foi muito usada.</b> Ela treinou os alphas, escolheu a melhor época do DARTS e deu nota aos 400 candidatos. Por isso as acurácias da busca são otimistas, e só o teste da Fase 3 é uma medida limpa.</li>
+    <li><b>O hipervolume não é monotônico.</b> O ponto de referência é recalculado a cada geração a partir dos piores valores da frente, então a métrica pode cair sem que a busca tenha piorado.</li>
+    <li><b>A contagem de FLOPs padrão é parcial.</b> O contador <code>hooks</code> considera camadas lineares e convolucionais, mas não as multiplicações de matrizes da atenção (~4% do total no ViT-Base). Use <code>flops_counter: pytorch</code> para a conta completa, e compare buscas só dentro do mesmo contador.</li>
+    <li><b>Buscas com quantidades diferentes de dados não são comparáveis.</b> As notas da busca dependem do <code>limit_data_value</code>; a <code>busca_mlp1</code> usou 10000 e a <code>busca_mlp_pytorch</code>, 5000.</li>
+    <li><b>A referência sem poda.</b> Para dizer quanto a poda custou, é preciso treinar o ViT-Base completo com o mesmo protocolo da Fase 3: <code>retrain.py --baseline</code>. No CIFAR-100 a poda custou 1,2 ponto (seção 13); no CIFAR-10 essa medida ainda não foi feita.</li>
+    <li><b>O nome <code>best_accuracy</code> engana.</b> Na busca, é a média das últimas épocas, não a melhor.</li>
+  </ul>
+</section>
+
+<!-- 12 -->
+<section id="registro">
+  <h2><span class="num">12</span>Registro do experimento CIFAR-10</h2>
+  <p>Tudo o que foi rodado de 1 a 2 de novembro de 2026, na ordem, com as configurações e os resultados de cada fase.</p>
+
+  <h3>Ambiente</h3>
+  <div class="tablewrap"><table>
+    <tbody>
+      <tr><th>Servidor</th><td>lira-150, 3 GPUs NVIDIA A30 (24 GB cada), driver CUDA 12.2</td></tr>
+      <tr><th>Python</th><td>3.10.22, ambiente <code>.venv</code> criado com uv (fora da pasta pessoal, em <code>/data-ext</code>)</td></tr>
+      <tr><th>PyTorch</th><td>versão para CUDA 12.1 (índice <code>cu121</code>)</td></tr>
+      <tr><th>Modelo</th><td><code>vit_base_patch16_224</code> pré-treinado (timm), 86 M parâmetros, 33,7 GFLOPs</td></tr>
+      <tr><th>Dados</th><td>CIFAR-10: 45.000 treino / 5.000 validação / 10.000 teste (<code>split_seed 2025</code>)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Linha do tempo</h3>
+  <div class="timeline">
+    <div class="tl bad"><h4>DARTS, primeira tentativa (descartada)</h4><span class="when">1 nov · interrompida na época 5 de 10</span>
+      <p><code>lr</code> 1e-3 nos pesos, sem gradient clipping. Estável até a época 4 (~70% de validação), divergiu na época 5: a loss saltou para 19,5 e a acurácia caiu abaixo de 30%. Motivou as correções de estabilidade (PR #1).</p></div>
+    <div class="tl"><h4>Fase 1: DARTS corrigido</h4><span class="when">1 nov · ~3 h · 10 épocas</span>
+      <p><code>config.yaml</code>, todas as imagens, batch 16, <code>lr_w</code> 1e-4, <code>lr_alpha</code> 3e-4, <code>grad_clip</code> 5, 1 época de warm-up, seed 42. Validação completa: 93,98% na época 1 (warm-up); <b>melhor época 3, com 95,40%</b>. Sem divergência. Maior peso ao fim da época 4: cabeça 2,50, neurônio do MLP 4,96.</p></div>
+    <div class="tl"><h4>Fase 2: busca com poda de cabeças e MLP</h4><span class="when">2 nov · 00h29–07h16 · 6 h 47 min</span>
+      <p><code>config_mlp.yaml</code> (24 genes), NSGA-II, 20 candidatos × 20 gerações = 400 avaliados, 9.000 imagens de treino e 1.000 de validação por candidato, FLOPs pelo contador <code>hooks</code>, 3 GPUs em paralelo, seed 42. <b>13 candidatos na frente de Pareto</b>, de 12,47 a 18,82 GFLOPs e de 90,50% a 94,45% de validação.</p></div>
+    <div class="tl"><h4>Fase 3: retreino e teste do 17_5</h4><span class="when">2 nov · 53 min · 10 épocas</span>
+      <p>Todas as 45.000 imagens de treino. Melhor época 7 (95,98% de validação). <b>Teste: 95,97% (top-1) e 99,95% (top-5)</b> em 10.000 imagens, com 18,82 GFLOPs e 48,0 M parâmetros.</p></div>
+    <div class="tl"><h4>Fase 2 de novo: busca com FLOPs do PyTorch</h4><span class="when">2–3 nov · 23h44–03h03 · 3 h 20 min</span>
+      <p><code>config_mlp_pytorch.yaml</code> (<code>flops_counter: pytorch</code>), mesmos alphas do DARTS, NSGA-II 20 × 20, seed 42, mas 4.500 imagens de treino e 500 de validação por candidato. Na geração 0, os mesmos candidatos da busca anterior tiveram de 0,78 a 0,93 G a mais de FLOPs, como esperado. Maior nota: <b>6_0, 92,6%</b> com 22,36 G; mais barato entre os melhores de cada geração: 13_10, 90,9% com 17,90 G (−49%).</p></div>
+    <div class="tl"><h4>Fase 3: retreino e teste do 6_0</h4><span class="when">3 nov · 1 h 00 min · 10 épocas</span>
+      <p>Melhor época 6 (95,84% de validação). <b>Teste: 95,67% (top-1) e 99,87% (top-5)</b>, com 22,36 GFLOPs pelo PyTorch (21,36 G pelo contador antigo; 11,18 G MACs) e 54,5 M parâmetros.</p></div>
+  </div>
+
+  <h3>Onde estão os arquivos no servidor</h3>
+  <p>Em 3 de novembro, os arquivos do CIFAR-10 foram movidos para subpastas <code>cifar10/</code>, separados dos do CIFAR-100.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Arquivo</th><th>Conteúdo</th></tr></thead>
+    <tbody>
+      <tr><td><code>darts_alphas/vit_base_cifar10.json</code></td><td>Alphas da melhor época do DARTS (usados pela busca)</td></tr>
+      <tr><td><code>darts_alphas/vit_base_cifar10.history.json</code></td><td>Acurácia, loss e resumo dos alphas de cada época</td></tr>
+      <tr><td><code>experiment_vit/cifar10/busca_mlp1/pareto_history.pkl</code></td><td>Frente de Pareto e hipervolume de cada geração</td></tr>
+      <tr><td><code>logs/cifar10/busca_mlp1.log</code>, <code>experiment_vit/cifar10/busca_mlp1/log.txt</code></td><td>Acurácia e FLOPs dos 400 candidatos</td></tr>
+      <tr><td><code>retrain_results/cifar10/17_5/results.json</code></td><td>Resultado do teste, histórico por época, FLOPs, parâmetros</td></tr>
+      <tr><td><code>retrain_results/cifar10/17_5/model_state.pt</code></td><td>Pesos do modelo podado (~190 MB)</td></tr>
+      <tr><td><code>experiment_vit/cifar10/busca_mlp_pytorch/</code></td><td>Busca com FLOPs do PyTorch: <code>pareto_history.pkl</code>, <code>generations.json</code>, <code>log.txt</code>, <code>checkpoint.pkl</code></td></tr>
+      <tr><td><code>retrain_results/cifar10/6_0/</code></td><td>Teste do 6_0: <code>results.json</code> (com <code>flops_hooks</code> e <code>flops_pytorch</code>) e <code>model_state.pt</code></td></tr>
+      <tr><td><code>resultado_6_0_pytorch.tar.gz</code></td><td>Pacote com o teste do 6_0, o config, os alphas e a busca (194 MB)</td></tr>
+      <tr><td><code>config_mlp.yaml</code></td><td>Config da busca e do retreino (necessário para reconstruir o modelo)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Baixar os resultados</h3>
+  <p>Os botões abaixo salvam no seu computador uma cópia desta página (abre no navegador, sem internet, só as fontes podem mudar), os resultados do experimento em JSON e a frente de Pareto em CSV, que abre no Excel ou no Google Planilhas.</p>
+  <div class="dlbar" data-dl>
+    <button type="button" class="dlbtn" data-kind="html">Baixar esta página <small>.html</small></button>
+    <button type="button" class="dlbtn" data-kind="json">Resultados CIFAR-10 <small>.json</small></button>
+    <button type="button" class="dlbtn" data-kind="json100">Resultados CIFAR-100 <small>.json</small></button>
+    <button type="button" class="dlbtn" data-kind="csv">Frente de Pareto <small>.csv</small></button>
+  </div>
+  <p class="dlstatus" data-dlstatus aria-live="polite"></p>
+</section>
+
+<!-- 13 -->
+<section id="cifar100">
+  <h2><span class="num">13</span>Experimento CIFAR-100</h2>
+  <p>O mesmo pipeline, agora num problema bem mais difícil: <b>100 classes</b>, com 500 imagens de treino por classe em vez de 5.000. As três fases rodaram em sequência num único comando (<code>run_cifar100.sh</code>, numa sessão tmux), de 3 a 4 de novembro de 2026 (a referência sem poda, em 5 de novembro), com o contador de FLOPs do PyTorch do início ao fim.</p>
+
+  <div class="facts">
+    <div class="fact"><b>83,63%</b><span>acurácia de teste (top-1)</span></div>
+    <div class="fact"><b>97,23%</b><span>acurácia de teste (top-5)</span></div>
+    <div class="fact"><b>−46,5%</b><span>FLOPs: 18,79 G contra 35,13 G</span></div>
+    <div class="fact"><b>45,3 M</b><span>parâmetros, contra ~86 M</span></div>
+    <div class="fact"><b>−1,23 ponto</b><span>custo da poda: 83,63% contra 84,86% sem poda</span></div>
+  </div>
+
+  <h3>O que mudou em relação ao CIFAR-10</h3>
+  <ul class="tight">
+    <li><b>O classificador.</b> A cabeça do ViT passa a ter 100 saídas (768 → 100), criada do zero. O resto do modelo é o mesmo ViT-Base pré-treinado.</li>
+    <li><b>O config.</b> <code>config_cifar100_pytorch.yaml</code>: <code>dataset: cifar100</code>, <code>prune_mlp: true</code> (24 genes), <code>flops_counter: pytorch</code>, alphas em <code>darts_alphas/vit_base_cifar100.json</code>.</li>
+    <li><b>O DARTS.</b> 12 épocas com todas as imagens, sendo as 3 primeiras de warm-up (só os pesos treinam; os alphas ficam parados). No CIFAR-10 foram 10 épocas com 1 de warm-up.</li>
+    <li><b>A busca.</b> NSGA-II, 20 candidatos × 20 gerações, seed 42, 3 GPUs em paralelo, <code>limit_data_value</code> 10000: 9.000 imagens de treino e 1.000 de validação por candidato. São só 90 imagens de treino e 10 de validação por classe, por isso as notas da busca ficaram bem abaixo das do teste final.</li>
+    <li><b>A separação dos arquivos.</b> Tudo do CIFAR-100 fica em subpastas <code>cifar100/</code>: <code>logs/cifar100/</code>, <code style="overflow-wrap:anywhere">experiment_vit/cifar100/busca_mlp_pytorch/</code> e <code>retrain_results/cifar100/</code>.</li>
+  </ul>
+
+  <h3>Fase 2: o que a busca encontrou</h3>
+  <p>Nas últimas gerações, os candidatos avaliados ficaram entre <b>11,7 e 20,6 GFLOPs</b> (de −67% a −41%) e entre 58% e 78% de nota na busca. Cada geração levou cerca de 18 a 21 minutos. Alguns pontos vistos no log:</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Candidato</th><th>Nota na busca</th><th>GFLOPs (PyTorch)</th><th>Redução</th></tr></thead>
+    <tbody>
+      <tr><td><code>16_15</code></td><td class="n">77,70%</td><td class="n">20,09</td><td class="n">−43%</td></tr>
+      <tr><td><code>17_15</code></td><td class="n">77,65%</td><td class="n">18,61</td><td class="n">−47%</td></tr>
+      <tr><td><code>17_11</code></td><td class="n">77,10%</td><td class="n">15,60</td><td class="n">−56%</td></tr>
+      <tr><td>mais leve visto</td><td class="n">57,85%</td><td class="n">11,69</td><td class="n">−67%</td></tr>
+    </tbody>
+  </table></div>
+  <p>O <code>17_11</code> chama atenção: quase a mesma nota dos melhores, com 56% menos FLOPs. O script retreina automaticamente o <code>best_so_far</code> (a maior nota de toda a busca), que foi o <code>19_12</code>.</p>
+
+  <h3>Fase 3: retreino e teste do 19_12</h3>
+  <p>Retreinado com as 45.000 imagens de treino por 10 épocas, numa A30 (cerca de 7 min por época). O teste usou as 10.000 imagens oficiais do CIFAR-100, uma única vez.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Medida</th><th>19_12 (CIFAR-100)</th><th>17_5 (CIFAR-10)</th></tr></thead>
+    <tbody>
+      <tr><td><b>Acurácia de teste (top-1)</b></td><td class="n"><b>83,63%</b></td><td class="n">95,97%</td></tr>
+      <tr><td>Acurácia de teste (top-5)</td><td class="n">97,23%</td><td class="n">99,95%</td></tr>
+      <tr><td>Melhor época (validação)</td><td class="n">3 · 84,56%</td><td class="n">7 · 95,98%</td></tr>
+      <tr><td>Última época (treino · val)</td><td class="n">97,57% · 83,24%</td><td class="n">99,20% · 95,00%</td></tr>
+      <tr><td>FLOPs, contador PyTorch</td><td class="n">18,79 G (−46,5%)</td><td class="n">19,77 G* (−43,7%)</td></tr>
+      <tr><td>FLOPs, contador hooks</td><td class="n">17,74 G (−47,4%)</td><td class="n">18,82 G (−44,1%)</td></tr>
+      <tr><td>MACs (PyTorch ÷ 2)</td><td class="n">9,40 G</td><td class="n">9,89 G*</td></tr>
+      <tr><td>Parâmetros</td><td class="n">45,3 M (~−47%)</td><td class="n">48,0 M (−44%)</td></tr>
+      <tr><td>Tempo de retreino</td><td class="n">1h12</td><td class="n">53 min</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">* Calculado, não medido (ver seção 08).</p>
+
+  <h3>O custo da poda: comparação com o ViT-Base sem poda</h3>
+  <p>Para separar o efeito da poda do efeito do protocolo de treino, o ViT-Base <b>completo</b> (todas as cabeças e todos os neurônios) foi retreinado com exatamente o mesmo protocolo do <code>19_12</code>: mesmo config, mesma divisão, 10 épocas, atenção congelada, MLPs e classificador treinados, melhor época escolhida na validação e uma única avaliação nas 10.000 imagens de teste. Rodou em 5 de novembro de 2026 com <code>retrain.py --baseline</code>.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Medida</th><th>Sem poda</th><th>19_12 (podado)</th><th>Diferença</th></tr></thead>
+    <tbody>
+      <tr><td><b>Acurácia de teste (top-1)</b></td><td class="n"><b>84,86%</b></td><td class="n"><b>83,63%</b></td><td class="n"><b>−1,23 ponto</b></td></tr>
+      <tr><td>Acurácia de teste (top-5)</td><td class="n">97,52%</td><td class="n">97,23%</td><td class="n">−0,29 ponto</td></tr>
+      <tr><td>Melhor época (validação)</td><td class="n">5 · 85,46%</td><td class="n">3 · 84,56%</td><td class="n">−0,90 ponto</td></tr>
+      <tr><td>Última época (treino · val)</td><td class="n">97,68% · 83,66%</td><td class="n">97,57% · 83,24%</td><td class="n">—</td></tr>
+      <tr><td>FLOPs, contador PyTorch</td><td class="n">35,13 G</td><td class="n">18,79 G</td><td class="n">−46,5%</td></tr>
+      <tr><td>FLOPs, contador hooks</td><td class="n">33,70 G</td><td class="n">17,74 G</td><td class="n">−47,4%</td></tr>
+      <tr><td>MACs (PyTorch ÷ 2)</td><td class="n">17,56 G</td><td class="n">9,40 G</td><td class="n">−46,5%</td></tr>
+      <tr><td>Parâmetros</td><td class="n">85,9 M</td><td class="n">45,3 M</td><td class="n">−47,3%</td></tr>
+      <tr><td>Tempo por época de treino</td><td class="n">9 min 13 s</td><td class="n">~7 min 15 s</td><td class="n">−21%</td></tr>
+      <tr><td>Tempo de retreino (10 épocas)</td><td class="n">1h32</td><td class="n">1h12</td><td class="n">−21%</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="tight">
+    <li><b>A poda custou 1,23 ponto de acurácia</b> para cortar quase metade dos FLOPs e dos parâmetros. O modelo podado mantém 98,6% da acurácia do completo (83,63 ÷ 84,86).</li>
+    <li><b>No top-5 a diferença quase some</b> (−0,29 ponto): o modelo podado erra a classe exata um pouco mais vezes, mas quase sempre ainda a coloca entre as cinco mais prováveis.</li>
+    <li><b>O teto vem do protocolo, não da poda.</b> Mesmo sem poda, este protocolo chega a 84,86%, longe dos 89–92% de um fine-tuning completo na literatura. A atenção congelada, a falta de data augmentation e as 10 épocas limitam os dois modelos igualmente. Melhorar o protocolo deve subir os dois.</li>
+    <li><b>O sem poda também sobreajustou</b>, só um pouco mais tarde: melhor época 5, e a validação caiu para 83,66% na época 10.</li>
+    <li><b>O ganho de tempo é menor que o de FLOPs.</b> O treino ficou 21% mais rápido, não 47%. Parte do tempo de cada passo não depende do tamanho do modelo: carregar as imagens e ampliá-las de 32×32 para 224×224, além do backward pela atenção congelada (que continua necessário para treinar as MLPs dos blocos anteriores). Na inferência, sem backward e com os dados prontos, a diferença tende a ficar mais perto da de FLOPs.</li>
+  </ul>
+
+  <h3>Como ler esse resultado</h3>
+  <ul class="tight">
+    <li><b>O número é confiável.</b> O teste (83,63%) ficou perto da validação da melhor época (84,56%). A escolha da época não inflou o resultado.</li>
+    <li><b>Está na faixa esperada, na ponta de baixo.</b> O ViT-Base completo, com fine-tuning, costuma chegar a 89–92% no CIFAR-100. A expectativa para o modelo podado era 83–88%. A comparação acima mostra que essa distância vem quase toda do protocolo: o mesmo modelo sem poda fica em 84,86%.</li>
+    <li><b>O retreino sobreajustou cedo.</b> A melhor validação veio na época 3. Depois disso, o treino subiu para ~97,6% enquanto a validação oscilou entre 82% e 84% e a loss de validação subiu. Como o script guarda os pesos da melhor época, o teste não foi prejudicado, mas as épocas 4 a 10 não ajudaram.</li>
+    <li><b>A poda é parecida com a do CIFAR-10.</b> Com 100 classes, o modelo cortou praticamente a mesma fração (−47% contra −44%). A diferença de acurácia vem da dificuldade do problema, não de uma poda mais agressiva.</li>
+  </ul>
+  <div class="warn"><b>Próximos passos</b>Data augmentation no retreino (crop aleatório e flip; talvez mixup) é a forma mais provável de subir a acurácia, porque hoje o treino não usa nenhuma. Também valem: menos épocas ou learning rate com decaimento e retreinar o <code>17_11</code> (−56% de FLOPs). Qualquer mudança de protocolo deve ser aplicada também ao modelo sem poda, para que a comparação continue justa.</div>
+
+  <h3>Onde estão os arquivos no servidor</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Arquivo</th><th>Conteúdo</th></tr></thead>
+    <tbody>
+      <tr><td><code>run_cifar100.sh</code></td><td>O comando único que rodou as três fases e empacotou tudo</td></tr>
+      <tr><td><code>config_cifar100_pytorch.yaml</code></td><td>Config das três fases (necessário para reconstruir o modelo)</td></tr>
+      <tr><td><code>darts_alphas/vit_base_cifar100.json</code>, <code>.history.json</code>, <code>_epochs/</code></td><td>Alphas da melhor época, histórico e alphas de cada época</td></tr>
+      <tr><td><code>logs/cifar100/</code></td><td><code>fase1_darts.log</code>, <code>fase2_busca.log</code>, <code>fase3_candidato.log</code>, <code>fase3_teste_19_12.log</code>, <code>fase3_teste_baseline.log</code></td></tr>
+      <tr><td><code>experiment_vit/cifar100/busca_mlp_pytorch/</code></td><td><code>pareto_history.pkl</code>, <code>generations.json</code>, <code>log.txt</code>, <code>checkpoint.pkl</code></td></tr>
+      <tr><td><code>retrain_results/cifar100/19_12/</code></td><td><code>results.json</code> (teste, histórico por época, FLOPs pelos dois contadores) e <code>model_state.pt</code></td></tr>
+      <tr><td><code>retrain_results/cifar100/baseline/</code></td><td>Referência sem poda: <code>results.json</code> (com <code>"baseline": true</code>) e <code>model_state.pt</code></td></tr>
+      <tr><td><code>resultado_cifar100_2026-11-04_0126.tar.gz</code></td><td>Pacote das três fases (164 MB); não inclui a referência sem poda, que rodou depois</td></tr>
+    </tbody>
+  </table></div>
+  <div class="dlbar" data-dl>
+    <button type="button" class="dlbtn" data-kind="json100">Resultados CIFAR-100 <small>.json</small></button>
+  </div>
+  <p class="dlstatus" data-dlstatus aria-live="polite"></p>
+</section>
+
+<footer>Guia escrito a partir do código do repositório <code>juliolops/vit_darts_simple</code> e dos resultados dos experimentos no CIFAR-10 (1 a 3 de novembro de 2026) e no CIFAR-100 (3 a 4 de novembro de 2026).</footer>
+</main>
+</div>
+
+<script>
+(function () {
+  // ---------- Playground: N * softmax(alpha) ----------
+  var N = 4, alphas = [0, 0, 0, 0];
+  var sl = document.getElementById('sliders');
+  var rows = [];
+  for (var i = 0; i < N; i++) {
+    var row = document.createElement('div');
+    row.className = 'srow';
+    row.innerHTML = '<label for="a' + i + '">cabeça ' + i + '</label>' +
+      '<input type="range" id="a' + i + '" min="-3" max="3" step="0.1" value="0">' +
+      '<div class="barcell"><div class="bar" style="width:40px"></div><span></span></div>';
+    sl.appendChild(row);
+    rows.push(row);
+    (function (k) {
+      row.querySelector('input').addEventListener('input', function (e) { alphas[k] = parseFloat(e.target.value); draw(); });
+    })(i);
+  }
+  var keepSel = document.getElementById('keep');
+  keepSel.addEventListener('change', draw);
+  document.getElementById('reset').addEventListener('click', function () { setAll([0, 0, 0, 0]); });
+  document.getElementById('spike').addEventListener('click', function () { setAll([3, -1, -1.5, -1]); });
+  function setAll(v) { alphas = v.slice(); rows.forEach(function (r, k) { r.querySelector('input').value = v[k]; }); draw(); }
+  function draw() {
+    var m = Math.max.apply(null, alphas);
+    var ex = alphas.map(function (a) { return Math.exp(a - m); });
+    var s = ex.reduce(function (a, b) { return a + b; }, 0);
+    var w = ex.map(function (e) { return N * e / s; });
+    var pct = parseInt(keepSel.value, 10);
+    var nKeep = Math.max(1, Math.min(N, Math.round(N * pct / 100)));
+    var order = w.map(function (v, k) { return k; }).sort(function (a, b) { return w[b] - w[a]; });
+    var kept = order.slice(0, nKeep);
+    var maxW = Math.max(4, Math.max.apply(null, w));
+    rows.forEach(function (r, k) {
+      var bar = r.querySelector('.bar');
+      bar.style.width = Math.max(2, 130 * w[k] / maxW) + 'px';
+      bar.classList.toggle('cut', kept.indexOf(k) < 0);
+      r.querySelector('.barcell span').textContent = 'peso ' + w[k].toFixed(2) + (kept.indexOf(k) < 0 ? '  removida' : '');
+    });
+    var mean = w.reduce(function (a, b) { return a + b; }, 0) / N;
+    document.getElementById('readout').textContent =
+      'média dos pesos = ' + mean.toFixed(2) + ' | maior peso = ' + Math.max.apply(null, w).toFixed(2) +
+      ' | cabeças mantidas: ' + kept.slice().sort().join(', ');
+  }
+  draw();
+
+  // ---------- Matrix slicing figure ----------
+  var svgNS = 'http://www.w3.org/2000/svg';
+  function rect(g, x, y, w, h, fill, op) {
+    var r = document.createElementNS(svgNS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y); r.setAttribute('width', w); r.setAttribute('height', h);
+    r.setAttribute('fill', fill); r.setAttribute('rx', 2);
+    if (op) r.setAttribute('opacity', op);
+    g.appendChild(r);
+  }
+  function text(g, x, y, s, fill, anchor) {
+    var t = document.createElementNS(svgNS, 'text');
+    t.setAttribute('x', x); t.setAttribute('y', y); t.setAttribute('fill', fill || 'var(--muted)');
+    t.setAttribute('font-family', 'JetBrains Mono, monospace'); t.setAttribute('font-size', '11');
+    if (anchor) t.setAttribute('text-anchor', anchor);
+    t.textContent = s; g.appendChild(t);
+  }
+  var keepH = [0, 2];
+  var qg = document.getElementById('qkvrows');
+  ['q', 'k', 'v'].forEach(function (seg, si) {
+    var y0 = 30 + si * 60;
+    text(qg, 10, y0 + 30, seg, 'var(--fg)');
+    for (var h = 0; h < 4; h++) {
+      var on = keepH.indexOf(h) >= 0;
+      rect(qg, 30, y0 + h * 13, 330, 11, on ? 'var(--attn)' : 'var(--frozen)', on ? null : 0.35);
+      text(qg, 368, y0 + h * 13 + 9, 'cab ' + h, on ? 'var(--attn)' : 'var(--muted)');
+    }
+  });
+  var pg = document.getElementById('projcols');
+  for (var h2 = 0; h2 < 4; h2++) {
+    var on2 = keepH.indexOf(h2) >= 0;
+    rect(pg, 430 + h2 * 52, 30, 46, 170, on2 ? 'var(--attn)' : 'var(--frozen)', on2 ? null : 0.35);
+    text(pg, 453 + h2 * 52, 212 - 8, 'cab ' + h2, on2 ? 'var(--attn)' : 'var(--muted)', 'middle');
+  }
+
+  // ---------- Pareto front (real data from busca_mlp1) ----------
+  var FRONT = window.CIFAR10_FRONT = [
+    {id:"16_11",acc:90.50,gflops:12.47,heads:[30,30,50,50,80,80,40,60,50,50,40,40],mlp:[20,20,50,20,30,40,30,20,30,20,30,40]},
+    {id:"18_11",acc:91.35,gflops:12.69,heads:[30,30,50,50,80,80,40,60,50,30,40,40],mlp:[20,40,50,20,30,40,30,20,30,20,30,40]},
+    {id:"15_15",acc:91.55,gflops:13.03,heads:[30,30,70,60,80,60,40,70,40,50,40,40],mlp:[20,20,50,20,40,40,50,20,30,20,30,40]},
+    {id:"14_19",acc:92.30,gflops:13.14,heads:[30,30,50,50,70,80,40,70,50,50,40,40],mlp:[20,50,50,20,40,40,30,20,30,20,30,40]},
+    {id:"17_6",acc:92.40,gflops:13.29,heads:[30,30,50,50,80,80,40,70,50,50,40,40],mlp:[20,50,50,20,40,40,30,20,30,20,30,40]},
+    {id:"13_14",acc:92.80,gflops:14.90,heads:[30,60,70,60,70,80,60,60,40,50,40,40],mlp:[20,70,30,40,30,30,60,30,30,40,30,50]},
+    {id:"14_11",acc:93.15,gflops:14.93,heads:[80,50,70,60,70,80,40,70,90,50,40,40],mlp:[30,60,50,20,30,20,60,20,40,20,30,40]},
+    {id:"16_10",acc:93.40,gflops:15.85,heads:[80,80,60,70,70,80,40,80,90,40,60,40],mlp:[20,30,60,40,30,50,30,30,30,30,30,60]},
+    {id:"19_12",acc:93.50,gflops:16.00,heads:[80,80,90,60,70,80,60,80,60,40,60,50],mlp:[30,30,60,40,30,30,60,20,30,40,30,40]},
+    {id:"13_12",acc:93.75,gflops:16.39,heads:[80,50,90,50,80,60,50,70,90,50,40,40],mlp:[20,30,50,30,60,60,80,20,30,30,30,50]},
+    {id:"18_7",acc:93.90,gflops:18.30,heads:[80,90,70,60,70,80,40,70,90,50,40,40],mlp:[60,50,60,80,40,40,30,30,30,20,80,60]},
+    {id:"5_18",acc:94.00,gflops:18.45,heads:[80,90,70,60,70,90,40,70,90,50,50,40],mlp:[30,60,60,90,30,30,50,20,60,20,80,50]},
+    {id:"17_5",acc:94.45,gflops:18.82,heads:[80,90,70,60,70,90,40,70,90,50,50,40],mlp:[30,50,60,90,30,30,50,40,60,20,80,60]}
+  ];
+  var BASE = 33.7;
+  var sv = document.getElementById('pareto');
+  var X0 = 46, X1 = 344, Y0 = 220, Y1 = 16;
+  var xmin = 12, xmax = 20, ymin = 90, ymax = 95;
+  function sx(v) { return X0 + (v - xmin) / (xmax - xmin) * (X1 - X0); }
+  function sy(v) { return Y0 - (v - ymin) / (ymax - ymin) * (Y0 - Y1); }
+  function line(x1, y1, x2, y2, stroke, dash) {
+    var l = document.createElementNS(svgNS, 'line');
+    l.setAttribute('x1', x1); l.setAttribute('y1', y1); l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+    l.setAttribute('stroke', stroke); l.setAttribute('stroke-width', 1);
+    if (dash) l.setAttribute('stroke-dasharray', dash);
+    sv.appendChild(l);
+  }
+  for (var gx = 12; gx <= 20; gx += 2) { line(sx(gx), Y0, sx(gx), Y1, 'var(--line)'); text(sv, sx(gx), Y0 + 16, gx, null, 'middle'); }
+  for (var gy = 90; gy <= 95; gy += 1) { line(X0, sy(gy), X1, sy(gy), 'var(--line)'); text(sv, X0 - 6, sy(gy) + 4, gy + '%', null, 'end'); }
+  text(sv, (X0 + X1) / 2, 254, 'GFLOPs por imagem (menos é melhor)', null, 'middle');
+  var yl = document.createElementNS(svgNS, 'text');
+  yl.setAttribute('transform', 'translate(11,' + ((Y0 + Y1) / 2) + ') rotate(-90)');
+  yl.setAttribute('text-anchor', 'middle'); yl.setAttribute('font-size', '11'); yl.setAttribute('fill', 'var(--muted)');
+  yl.setAttribute('font-family', 'JetBrains Mono, monospace'); yl.textContent = 'acurácia de validação';
+  sv.appendChild(yl);
+  // staircase connecting the front
+  var pts = FRONT.slice().sort(function (a, b) { return a.gflops - b.gflops; });
+  var d = '';
+  pts.forEach(function (p, k) { d += (k ? 'L' : 'M') + sx(p.gflops) + ' ' + sy(p.acc) + ' '; });
+  var path = document.createElementNS(svgNS, 'path');
+  path.setAttribute('d', d); path.setAttribute('fill', 'none'); path.setAttribute('stroke', 'var(--accent)');
+  path.setAttribute('stroke-width', 1.2); path.setAttribute('opacity', 0.5);
+  sv.appendChild(path);
+
+  var selected = '17_5';
+  var nodes = {};
+  FRONT.forEach(function (p) {
+    var g = document.createElementNS(svgNS, 'g');
+    g.setAttribute('class', 'pt'); g.setAttribute('tabindex', '0'); g.setAttribute('role', 'button');
+    g.setAttribute('aria-label', p.id + ': ' + p.acc.toFixed(2) + '% com ' + p.gflops.toFixed(2) + ' GFLOPs');
+    var c = document.createElementNS(svgNS, 'circle');
+    c.setAttribute('cx', sx(p.gflops)); c.setAttribute('cy', sy(p.acc)); c.setAttribute('r', 6);
+    c.setAttribute('stroke', 'var(--surface)'); c.setAttribute('stroke-width', 1.5);
+    g.appendChild(c);
+    var hit = document.createElementNS(svgNS, 'circle');
+    hit.setAttribute('cx', sx(p.gflops)); hit.setAttribute('cy', sy(p.acc)); hit.setAttribute('r', 12);
+    hit.setAttribute('fill', 'transparent'); g.appendChild(hit);
+    g.addEventListener('click', function () { select(p.id); });
+    g.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(p.id); } });
+    sv.appendChild(g);
+    nodes[p.id] = c;
+  });
+  var lab = document.createElementNS(svgNS, 'text');
+  lab.setAttribute('font-family', 'JetBrains Mono, monospace'); lab.setAttribute('font-size', '11');
+  lab.setAttribute('fill', 'var(--fg)'); lab.setAttribute('font-weight', '600');
+  sv.appendChild(lab);
+
+  function headsKept(p) { return Math.max(1, Math.min(12, Math.round(12 * p / 100))); }
+  function select(id) {
+    selected = id;
+    var p = FRONT.filter(function (f) { return f.id === id; })[0];
+    Object.keys(nodes).forEach(function (k) {
+      nodes[k].setAttribute('fill', k === id ? 'var(--accent)' : 'var(--muted)');
+      nodes[k].setAttribute('r', k === id ? 8 : 6);
+    });
+    var lx = sx(p.gflops), ly = sy(p.acc);
+    lab.setAttribute('x', lx > 260 ? lx - 12 : lx + 12); lab.setAttribute('y', ly - 10);
+    lab.setAttribute('text-anchor', lx > 260 ? 'end' : 'start');
+    lab.textContent = p.id;
+    var red = Math.round(100 * (1 - p.gflops / BASE));
+    var html = '<h5>Candidato ' + p.id + (id === '17_5' ? ' · testado na Fase 3' : '') + '</h5>' +
+      '<p class="meta">' + p.acc.toFixed(2).replace('.', ',') + '% val · ' + p.gflops.toFixed(2).replace('.', ',') +
+      ' GFLOPs · ' + red + '% menos custo · geração ' + p.id.split('_')[0] + '</p>';
+    html += '<div class="blocks">';
+    html += '<span class="rl">bloco</span>';
+    for (var b = 0; b < 12; b++) html += '<span class="bn">' + b + '</span>';
+    html += '<span class="rl">cabeças</span>';
+    p.heads.forEach(function (h) { var n = headsKept(h); html += '<div class="col a" title="' + n + ' de 12 cabeças (' + h + '%)"><i style="height:' + (n / 12 * 100) + '%"></i></div>'; });
+    html += '<span class="rl"></span>';
+    p.heads.forEach(function (h) { html += '<span class="v">' + headsKept(h) + '</span>'; });
+    html += '<span class="rl">MLP</span>';
+    p.mlp.forEach(function (m) { html += '<div class="col m" title="' + m + '% dos 3072 neurônios"><i style="height:' + m + '%"></i></div>'; });
+    html += '<span class="rl"></span>';
+    p.mlp.forEach(function (m) { html += '<span class="v">' + m + '</span>'; });
+    html += '</div>';
+    document.getElementById('detail').innerHTML = html;
+  }
+  select(selected);
+})();
+</script>
+<script>
+(function () {
+  var EXPERIMENT = {
+    experimento: 'ViT-Base podado no CIFAR-10 (vit_darts_simple)',
+    datas: '2026-11-01 a 2026-11-02',
+    ambiente: { servidor: 'lira-150', gpus: '3x NVIDIA A30 24GB', python: '3.10.22 (uv)', pytorch_indice: 'cu121', modelo: 'vit_base_patch16_224 (timm, pre-treinado)', modelo_completo: { gflops: 33.7, parametros_milhoes: 86 } },
+    dados: { dataset: 'cifar10', treino: 45000, validacao: 5000, teste: 10000, split_seed: 2025 },
+    fase1_darts: { config: 'config.yaml', epocas: 10, limit_data_value: 0, batch_size: 16, lr_w: 1e-4, lr_alpha: 3e-4, grad_clip: 5.0, warmup_epochs: 1, seed: 42, val_acc_epoca1: 93.98, melhor_epoca: 3, melhor_val_acc: 95.40, maior_peso_epoca4: { cabeca: 2.50, neuronio_mlp: 4.96 }, duracao_aprox: '~3h', alphas: 'darts_alphas/vit_base_cifar10.json',
+      tentativa_descartada: 'lr 1e-3 sem clipping: divergiu na epoca 5 (loss 19.5), interrompida' },
+    fase2_busca: { config: 'config_mlp.yaml', genes: 24, algoritmo: 'nsga2', populacao: 20, geracoes: 20, candidatos_avaliados: 400, limit_data_value: 10000, imagens_treino_por_candidato: 9000, imagens_val_por_candidato: 1000, flops_counter: 'hooks', threads: 3, seed: 42, inicio: '2026-11-02T03:29:12Z', fim: '2026-11-02T10:16:16Z', duracao: '6h47m', percentages: [20, 30, 40, 50, 60, 70, 80, 90], historico: 'experiment_vit/cifar10/busca_mlp1/pareto_history.pkl', frente_de_pareto: window.CIFAR10_FRONT },
+    fase3_teste: { candidato: '17_5', epocas: 10, imagens_treino: 45000, melhor_epoca: 7, melhor_val_acc: 95.98, ultima_epoca: { treino_acc1: 99.20, val_acc1: 95.00 }, teste_acc1: 95.97, teste_acc5: 99.95, imagens_teste: 10000, gflops: 18.82, reducao_flops_pct: 44, parametros_milhoes: 48.0, duracao: '53min26s', resultados: 'retrain_results/cifar10/17_5/results.json', flops_pytorch_calculado: 19.77 },
+    fase2b_busca_flops_pytorch: { config: 'config_mlp_pytorch.yaml', flops_counter: 'pytorch', alphas: 'darts_alphas/vit_base_cifar10.json', algoritmo: 'nsga2', populacao: 20, geracoes: 20, limit_data_value: 5000, imagens_treino_por_candidato: 4500, imagens_val_por_candidato: 500, threads: 3, seed: 42, inicio: '2026-11-03T02:43:59Z', fim: '2026-11-03T06:03:24Z', duracao: '3h19m', vit_base_gflops_pytorch: 35.13,
+      melhor_por_geracao: [['0_5', 91.5, 19.69], ['1_19', 91.5, 20.42], ['2_12', 92.1, 22.17], ['3_15', 91.4, 21.15], ['4_19', 91.4, 22.42], ['5_12', 91.4, 18.72], ['6_0', 92.6, 22.36], ['7_2', 91.6, 20.99], ['8_6', 91.0, 21.53], ['9_4', 90.9, 18.98], ['10_13', 91.6, 22.01], ['11_0', 92.5, 21.88], ['12_15', 92.2, 19.06], ['13_10', 90.9, 17.90], ['14_6', 91.3, 18.35], ['15_0', 91.4, 21.32], ['16_15', 90.6, 20.41], ['17_6', 91.8, 20.52], ['18_15', 92.0, 21.98], ['19_12', 92.0, 21.24]],
+      formato_melhor_por_geracao: ['id', 'val_acc_pct', 'gflops_pytorch'], historico: 'experiment_vit/cifar10/busca_mlp_pytorch/pareto_history.pkl' },
+    fase3b_teste: { candidato: '6_0', config: 'config_mlp_pytorch.yaml', epocas: 10, imagens_treino: 45000, melhor_epoca: 6, melhor_val_acc: 95.84, ultima_epoca: { treino_acc1: 99.14, val_acc1: 95.52 }, teste_acc1: 95.67, teste_acc5: 99.87, imagens_teste: 10000, gflops_pytorch: 22.36, gflops_hooks: 21.36, gmacs: 11.18, reducao_flops_pct_pytorch: 36.4, parametros_milhoes: 54.5, duracao: '1h00m01s', resultados: 'retrain_results/cifar10/6_0/results.json' }
+  };
+  var CIFAR100 = {
+    experimento: 'ViT-Base podado no CIFAR-100 (vit_darts_simple)',
+    datas: '2026-11-03 a 2026-11-05',
+    comando: 'run_cifar100.sh (fases 1, 2 e 3 + pacote, em tmux)',
+    ambiente: { servidor: 'lira-150', gpus: '3x NVIDIA A30 24GB', modelo: 'vit_base_patch16_224 (timm, pre-treinado)', modelo_completo: { gflops_pytorch: 35.13, gflops_hooks: 33.70, parametros_milhoes: 86 } },
+    dados: { dataset: 'cifar100', classes: 100, treino: 45000, validacao: 5000, teste: 10000, split_seed: 2025 },
+    config: 'config_cifar100_pytorch.yaml',
+    fase1_darts: { epocas: 12, warmup_epochs: 3, limit_data_value: 0, alphas: 'darts_alphas/vit_base_cifar100.json', log: 'logs/cifar100/fase1_darts.log' },
+    fase2_busca: { algoritmo: 'nsga2', genes: 24, populacao: 20, geracoes: 20, candidatos_avaliados: 400, limit_data_value: 10000, imagens_treino_por_candidato: 9000, imagens_val_por_candidato: 1000, flops_counter: 'pytorch', threads: 3, seed: 42, minutos_por_geracao: '18-21', historico: 'experiment_vit/cifar100/busca_mlp_pytorch/pareto_history.pkl',
+      candidatos_de_destaque: [['16_15', 77.70, 20.09], ['17_15', 77.65, 18.61], ['17_11', 77.10, 15.60]], formato_candidatos: ['id', 'val_acc_pct_busca', 'gflops_pytorch'] },
+    fase3_teste: { candidato: '19_12', epocas: 10, imagens_treino: 45000, melhor_epoca: 3, melhor_val_acc: 84.56, ultima_epoca: { treino_acc1: 97.57, val_acc1: 83.24 }, teste_acc1: 83.63, teste_acc5: 97.23, imagens_teste: 10000, gflops_pytorch: 18.79, gflops_hooks: 17.74, gmacs: 9.40, reducao_flops_pct_pytorch: 46.5, reducao_flops_pct_hooks: 47.4, parametros_milhoes: 45.3, duracao: '1h12m23s', resultados: 'retrain_results/cifar100/19_12/results.json' },
+    referencia_sem_poda: { comando: 'retrain.py --config_file config_cifar100_pytorch.yaml --baseline --epochs 10 --output_dir retrain_results/cifar100', data: '2026-11-05', epocas: 10, imagens_treino: 45000, melhor_epoca: 5, melhor_val_acc: 85.46, ultima_epoca: { treino_acc1: 97.68, val_acc1: 83.66 }, teste_acc1: 84.86, teste_acc5: 97.52, imagens_teste: 10000, gflops_pytorch: 35.13, gflops_hooks: 33.70, gmacs: 17.56, parametros_milhoes: 85.9, duracao: '1h32m09s', resultados: 'retrain_results/cifar100/baseline/results.json' },
+    custo_da_poda: { teste_acc1_pontos: -1.23, teste_acc5_pontos: -0.29, acuracia_relativa_pct: 98.6, reducao_flops_pct_pytorch: 46.5, reducao_parametros_pct: 47.3, reducao_tempo_treino_pct: 21 },
+    pacote: 'resultado_cifar100_2026-11-04_0126.tar.gz (164 MB, sem a referencia sem poda)'
+  };
+  function csv() {
+    var rows = [['id', 'val_acc_pct', 'gflops', 'reducao_flops_pct'].concat(
+      Array.from({ length: 12 }, function (_, b) { return 'cabecas_pct_b' + b; }),
+      Array.from({ length: 12 }, function (_, b) { return 'mlp_pct_b' + b; }))];
+    window.CIFAR10_FRONT.slice().sort(function (a, b) { return a.gflops - b.gflops; }).forEach(function (p) {
+      rows.push([p.id, p.acc.toFixed(2), p.gflops.toFixed(2), Math.round(100 * (1 - p.gflops / 33.7))].concat(p.heads, p.mlp));
+    });
+    return rows.map(function (r) { return r.join(','); }).join('\n') + '\n';
+  }
+  function payload(kind) {
+    if (kind === 'html') return { filename: 'vit-nas-por-dentro.html', data: '<!doctype html>\n' + document.documentElement.outerHTML };
+    if (kind === 'json100') return { filename: 'resultados_cifar100_vit_nas.json', data: JSON.stringify(CIFAR100, null, 2) + '\n' };
+    if (kind === 'json') return { filename: 'resultados_cifar10_vit_nas.json', data: JSON.stringify(EXPERIMENT, null, 2) + '\n' };
+    return { filename: 'frente_pareto_cifar10.csv', data: csv() };
+  }
+  var bars = document.querySelectorAll('[data-dl]');
+  var statuses = document.querySelectorAll('[data-dlstatus]');
+  function setStatus(msg) { statuses.forEach(function (s) { s.textContent = msg; }); }
+  var downloads = null;
+  // Outside claude.ai (e.g. opened from the repository): plain browser download.
+  function saveLocally(p) {
+    var url = URL.createObjectURL(new Blob([p.data], { type: 'application/octet-stream' }));
+    var a = document.createElement('a');
+    a.href = url; a.download = p.filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    setStatus(p.filename + ' salvo.');
+  }
+  bars.forEach(function (bar) {
+    bar.addEventListener('click', function (e) {
+      var btn = e.target.closest('button[data-kind]');
+      if (!btn) return;
+      var p = payload(btn.dataset.kind);
+      if (!downloads) { saveLocally(p); return; }
+      setStatus('Confirme o download de ' + p.filename + '.');
+      downloads.save(p).then(function () { setStatus(p.filename + ' salvo.'); }).catch(function (err) {
+        var code = err && err.code;
+        if (code === 'declined') setStatus('Download cancelado.');
+        else if (code === 'rate_limited') setStatus('Já há um download esperando confirmação. Conclua-o e tente de novo.');
+        else setStatus('Não foi possível baixar aqui (' + (code || 'erro') + ').');
+      });
+    });
+  });
+  if (window.claude && typeof window.claude.use === 'function') {
+    window.claude.use('downloads').then(function (d) {
+      downloads = d;
+      if (!d) setStatus('O download não está disponível nesta visualização.');
+    }).catch(function () { setStatus('O download não está disponível nesta visualização.'); });
+  }
+})();
+</script>
+</body>
+</html>
