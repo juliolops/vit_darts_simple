@@ -50,6 +50,114 @@ The test set is only reachable through `core.data.build_test_dataset`, which onl
     └── utils.py               # Seeding, logging, device selection
 ```
 
+## Code flow
+
+Who calls whom, in the order it happens. Each phase starts at a script you run, goes down through the functions it calls, and ends with a file that the next phase reads.
+
+```mermaid
+flowchart LR
+    C["config_*.yaml"] --> P1["Phase 1<br/>run_darts_alphas.py"]
+    P1 -->|"darts_alphas/*.json"| P2["Phase 2<br/>run_all_evolution.py"]
+    C --> P2
+    P2 -->|"pareto_history.pkl"| P3["Phase 3<br/>retrain.py"]
+    C --> P3
+    P3 --> R["retrain_results/&lt;dataset&gt;/&lt;id&gt;/<br/>results.json + model_state.pt"]
+```
+
+### Phase 1: DARTS (`run_darts_alphas.py`)
+
+```text
+run_darts_alphas.py  main()
+├── core/utils.py               set_global_seeds()          fix the seeds
+├── core/config.py              load_config()               read and check the YAML, compute num_genes
+├── core/utils.py               resolve_device()            pick the GPU
+├── core/data.py                build_datasets()            stratified 90% train / 10% val (test untouched)
+├── vit_transformer_search.py   build_darts_vit()
+│   ├── core/vit.py             create_vit()                pretrained ViT-Base, new classifier
+│   └── DartsAttentionWrapper / DartsMlpWrapper             12 head alphas + 3072 neuron alphas per block;
+│                                                           only fc1, fc2 and the classifier train
+├── AdamW (weights, --lr_w) + Adam (alphas, --lr_alpha)
+└── for each epoch
+    ├── vit_transformer_search.py   train_darts_epoch()
+    │   └── for each batch
+    │       ├── a) validation batch -> loss -> _clip() -> optimizer_alpha.step()   (skipped in warm-up)
+    │       ├── b) training batch   -> loss -> _clip() -> optimizer_w.step()
+    │       └── inside the wrappers: output × normalized_weights(alphas) = N·softmax(alphas)
+    ├── vit_transformer_search.py   evaluate()             accuracy on the whole validation set
+    ├── core/vit.py                 extract_alphas() + save_alphas()  -> <name>_epochs/epoch_NN.json
+    ├── run_darts_alphas.py         summarize_alphas() + print_alphas_summary()
+    └── best epoch so far?          save_alphas() -> <name>.json, write_history() -> <name>.history.json
+```
+
+Output: `darts_alphas/<name>.json`, the importance of every head and MLP neuron, read by Phase 2.
+
+### Phase 2: search (`run_all_evolution.py`)
+
+```text
+run_all_evolution.py  main()
+├── core/config.py              load_config()
+├── algorithms/nsga.py          load_checkpoint()           resume with --resume?
+├── core/evaluation.py          EvalPopulation(params)      the evaluator (runs nothing yet)
+└── algorithms/nsga.py          run_search()
+    ├── build_algorithm()                                   pymoo NSGA-II/III (SBX crossover + mutation)
+    └── for each generation
+        ├── algorithm.ask()                                 20 chromosomes, genes 0-7 -> percentages
+        ├── core/evaluation.py  EvalPopulation.__call__()   queue + one _worker() process per GPU
+        │   └── _worker()
+        │       ├── core/data.py        build_loaders()     balanced subset (limit_data_value)
+        │       └── for each candidate taken from the queue
+        │           └── core/training.py   evaluate_candidate()
+        │               ├── build_candidate()
+        │               │   ├── core/vit.py   load_alphas()
+        │               │   └── core/vit.py   build_pruned_vit()
+        │               │       ├── create_vit()
+        │               │       └── per block: select_by_alpha() -> prune_attention_heads()
+        │               │                                     -> prune_mlp_neurons()
+        │               ├── make_optimizer()                classifier lr 1e-3, MLPs lr 1e-4
+        │               ├── _run_epoch() × max_epochs       validation on the last epochs_to_eval -> best_accuracy (mean)
+        │               └── count_flops()                   hooks or pytorch -> total_flops
+        ├── algorithm.tell()                                NSGA-II picks the next parents
+        └── global Pareto front, hypervolume(), best_candidate()
+            -> pareto_history.pkl, generations.json, checkpoint.pkl
+```
+
+Output: `experiment_vit/.../pareto_history.pkl`, the Pareto front and every evaluated candidate, with ids `generation_index` (e.g. `19_12`), read by Phase 3. `run_search()` knows nothing about ViTs: it sends chromosomes and gets two scores back. Training and measuring a ViT is `EvalPopulation`'s job.
+
+### Phase 3: retrain and test (`retrain.py`)
+
+```text
+retrain.py  main()
+├── core/config.py              load_config()               the same config as the search
+├── what to train?
+│   ├── --id 19_12              find_chromosome()           looks it up in pareto_history.pkl
+│   ├── --chromosome 3 5 ...    the genes themselves
+│   └── --baseline              100% in every block (the unpruned ViT)
+├── core/data.py                build_loaders()             all the data: 45,000 train / 5,000 val
+├── core/training.py            build_candidate() + make_optimizer()   pruned exactly as in the search
+├── for each epoch
+│   ├── core/training.py        run_epoch_stats()  train    progress every --log_every batches
+│   └── core/training.py        run_epoch_stats()  val      best epoch so far? keep a copy of the weights
+├── core/data.py                build_test_dataset()        the only place the test set is loaded;
+│                                                           evaluated once with the best epoch's weights
+└── core/training.py            count_flops()               both counters, plus the parameter count
+                                -> retrain_results/<dataset>/<id>/results.json, model_state.pt
+```
+
+### Shared modules
+
+The same `build_pruned_vit()` prunes the candidate in the search and in the retrain, so the tested model is exactly the one the search scored.
+
+| File | Main functions | Phase 1 | Phase 2 | Phase 3 |
+|---|---|:-:|:-:|:-:|
+| `core/config.py` | `load_config` | ✓ | ✓ | ✓ |
+| `core/utils.py` | `set_global_seeds`, `resolve_device`, `seed_candidate`, `init_log` | ✓ | ✓ | ✓ |
+| `core/data.py` | `build_datasets`, `build_loaders`, `build_test_dataset` | ✓ | ✓ | ✓ (only phase that loads the test set) |
+| `core/vit.py` | `create_vit`, `extract_alphas`, `save_alphas`, `load_alphas`, `select_by_alpha`, `prune_attention_heads`, `prune_mlp_neurons`, `build_pruned_vit` | ✓ | ✓ | ✓ |
+| `core/training.py` | `build_candidate`, `make_optimizer`, `evaluate_candidate`, `run_epoch_stats`, `count_flops` | | ✓ | ✓ |
+| `core/evaluation.py` | `EvalPopulation`, `_worker` | | ✓ | |
+| `algorithms/nsga.py` | `run_search`, `build_algorithm`, `hypervolume`, `load_checkpoint` | | ✓ | |
+| `vit_transformer_search.py` | `build_darts_vit`, `DartsAttentionWrapper`, `DartsMlpWrapper`, `train_darts_epoch`, `evaluate` | ✓ | | |
+
 ## Datasets: CIFAR-10, CIFAR-100 or ImageNet
 
 The dataset is chosen in the config with `dataset`:
