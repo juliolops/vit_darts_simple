@@ -43,7 +43,9 @@ def main(args):
     print(f"timm {timm.__version__} | torch {torch.__version__} | device {device}")
 
     original = create_vit(args.model, args.pretrained, args.num_classes).to(device).eval()
-    wrapped = wrap(copy.deepcopy(original)).eval()
+    # The alphas are created on the CPU, so move the wrapped model after wrapping
+    # (build_darts_vit's callers do the same with model.to(device)).
+    wrapped = wrap(copy.deepcopy(original)).to(device).eval()
     x = torch.randn(args.batch, 3, 224, 224, device=device)
     failures = 0
 
