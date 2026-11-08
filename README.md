@@ -37,6 +37,7 @@ The test set is only reachable through `core.data.build_test_dataset`, which onl
 ├── vit_transformer_search.py  # DARTS attention/MLP wrappers + training epoch
 ├── run_all_evolution.py       # Phase 2: multi-objective search
 ├── retrain.py                 # Phase 3: retrain a Pareto candidate, evaluate once on the test set
+├── tests/check_darts_wrappers.py  # Checks that the DARTS wrappers match timm's Attention/Mlp
 ├── docs/vit-nas-por-dentro.html  # Didactic guide in Portuguese (open in a browser)
 ├── config.yaml                # Search space, ViT and training settings
 ├── algorithms/
@@ -65,6 +66,8 @@ flowchart LR
 ```
 
 ### Phase 1: DARTS (`run_darts_alphas.py`)
+
+The two wrappers in `vit_transformer_search.py` reuse timm's own layers (same pretrained weights, no copy) and follow timm's `Attention.forward` and `Mlp.forward` line by line, including the fused `scaled_dot_product_attention`. The only addition is the `N·softmax(alphas)` weighting of each head's output and each hidden neuron. With all alphas equal they compute exactly what timm does; `python tests/check_darts_wrappers.py` checks it on your machine (random weights, no download; add `--pretrained` for the real ones).
 
 ```text
 run_darts_alphas.py  main()
